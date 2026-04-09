@@ -1,0 +1,7 @@
+nats-py
+asyncio
+kokoro-onnx
+sounddevice
+soundfile
+numpy
+requests

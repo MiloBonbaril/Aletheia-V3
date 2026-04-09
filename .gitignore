@@ -35,3 +35,5 @@ secret.key
 # NATS Data (si test en local)
 nats-data/
 *.log
+
+services/io_voix/models
