@@ -10,6 +10,7 @@ Le projet adopte une approche "mono-repo" pour faciliter le développement de se
 - **Lobe Frontal** (`services/lobe_frontal/`) : Le Gestionnaire LLM (Python avec Groq Llama 3).
 - **Hippocampe** (`services/hippocampe/`) : La mémoire Épisodique (Qdrant) et Sémantique (PostgreSQL).
 - **I/O Oreilles** (`services/io_oreilles/`) : Speech-to-Text via Whisper.cpp.
+- **I/O Texte** (`services/io_text/`) : Entrée textuelle directe équivalente au STT.
 - **I/O Yeux** (`services/io_yeux/`) : Agrégateur d'événements du chat Twitch.
 - **I/O Voix** (`services/io_voix/`) : Text-to-Speech via Kokoro ONNX.
 - **I/O Visage** (`services/io_visage/`) : Contrôleur WebSocket pour VTube Studio.
