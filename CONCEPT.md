@@ -39,9 +39,9 @@ Afin de préserver la RTX 5070 Ti pour le jeu en direct et le rendu OBS/VTube St
 * **Mémoire Sémantique :** PostgreSQL (Paramètres, relations viewers, état global).
 
 ### 🎙️ D. LES CORTEX SENSORIELS ET MOTEURS (I/O)
-* **Oreilles (STT) :** `Whisper.cpp` ciblant matériellement le micro physique. Crée des événements `USER_SPOKE`.
-* **Clavier (Text I/O) :** Service dédié à l'entrée textuelle directe (Terminal/API). Crée un événement `USER_SPOKE` (ou `USER_TEXT` équivalent), permettant d'interagir sans passer par la voix.
-* **Yeux (Twitch) :** Agrégateur de chat pour éviter l'inondation de tokens. Crée des événements `CHAT_SUMMARY`.
+* **Oreilles (STT) :** `Whisper.cpp` ciblant matériellement le micro physique. Crée des événements `io.user.speak`.
+* **Clavier (Text I/O) :** Service dédié à l'entrée textuelle directe (Terminal/API). Crée un événement similaire `io.user.speak` (ou `io.user.msg.text` équivalent), permettant d'interagir sans passer par la voix.
+* **Yeux (Twitch) :** Agrégateur de chat pour éviter l'inondation de tokens. Crée des événements `io.chat.msg`(.text si message texte, autre chose si nécessaire).
 * **Cordes Vocales (TTS) :** `Kokoro ONNX`. Transforme les fragments de texte du Bus en `.wav` en mémoire et les joue dans le `Câble-IA` virtuel.
 * **Visage (VTube Controller) :** Capte l'audio du `Câble-IA` pour le Lip-Sync, et envoie les tags d'émotion générés par le LLM via WebSocket à VTube Studio.
 

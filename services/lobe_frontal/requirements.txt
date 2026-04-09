@@ -1,2 +1,4 @@
 nats-py
 asyncio
+groq
+python-dotenv
