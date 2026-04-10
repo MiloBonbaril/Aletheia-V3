@@ -11,8 +11,11 @@ load_dotenv()
 
 # Configuration
 ENABLE_PERSONA = True
-DEFAULT_PERSONA = "Tu es Aletheia, une VTubeuse IA autonome, curieuse et un peu sarcastique. Tu réponds de manière courte, naturelle et très dynamique pour un stream."
-MODEL = "llama-3.1-8b-instant"
+PERSONA_FILE = "Persona.md"
+# reads the persona file
+with open(PERSONA_FILE, "r") as f:
+    PERSONA = f.read()
+MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
 # Global conversation history
 conversation_history = []
@@ -20,7 +23,7 @@ conversation_history = []
 async def main():
     # Setup Persona
     if ENABLE_PERSONA:
-        conversation_history.append({"role": "system", "content": DEFAULT_PERSONA})
+        conversation_history.append({"role": "system", "content": PERSONA})
 
     print("🧠 Lobe Frontal en attente de connexion à NATS...")
     try:
