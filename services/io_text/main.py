@@ -22,6 +22,24 @@ async def main():
     print("  :c ou :clear -> Effacer le message en cours d'écriture")
     print("=====================================================\n")
 
+    async def fragment_handler(msg):
+        try:
+            data = json.loads(msg.data.decode())
+            text = data.get("text", "")
+            is_last = data.get("is_last", False)
+            
+            if text:
+                # Affichage du texte en cyan (\033[36m) pour le différencier
+                print(f"\033[36m{text}\033[0m", flush=True)
+                
+            if is_last:
+                print("\n> ", end="", flush=True)
+        except Exception as e:
+            print(f"\n[io_text] ❌ Erreur lors de la lecture du fragment: {e}")
+            print("> ", end="", flush=True)
+
+    await nc.subscribe("lobe.fragment_stream", cb=fragment_handler)
+
     current_message = []
     loop = asyncio.get_running_loop()
 
