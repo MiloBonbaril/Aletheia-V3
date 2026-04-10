@@ -10,21 +10,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-ENABLE_PERSONA = True
-PERSONA_FILE = "Persona.md"
-# reads the persona file
-with open(PERSONA_FILE, "r") as f:
-    PERSONA = f.read()
 MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
-# Global conversation history
-conversation_history = []
-
 async def main():
-    # Setup Persona
-    if ENABLE_PERSONA:
-        conversation_history.append({"role": "system", "content": PERSONA})
-
     print("🧠 Lobe Frontal en attente de connexion à NATS...")
     try:
         nc = await nats.connect("nats://localhost:4222")
@@ -52,14 +40,37 @@ async def main():
         
         print(f"\n[Lobe Frontal] Requête reçue sur '{subject}': {prompt}")
         
-        # Add user prompt to history
-        conversation_history.append({"role": "user", "content": prompt})
+        print("[Lobe Frontal] Récupération du contexte via Hippocampe...")
+        messages = []
+        try:
+            response = await nc.request("hippocampe.context.get", b"", timeout=5.0)
+            context = json.loads(response.data.decode())
+            system_prompt = context.get("system_prompt", "")
+            history = context.get("history", [])
+            
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            
+            for msg_entry in history:
+                messages.append({"role": msg_entry["role"], "content": msg_entry["content"]})
+                
+        except TimeoutError:
+            print("[Lobe Frontal] Timeout lors de la récupération du contexte.")
+        except Exception as e:
+            print(f"[Lobe Frontal] Erreur lors de la récupération du contexte: {e}")
+            
+        messages.append({"role": "user", "content": prompt})
+        
+        try:
+            await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": prompt}).encode())
+        except Exception as e:
+            print(f"[Lobe Frontal] Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
 
         print("[Lobe Frontal] Génération LLM via Groq en cours...")
         
         try:
             stream = await groq_client.chat.completions.create(
-                messages=conversation_history,
+                messages=messages,
                 model=MODEL,
                 stream=True,
             )
@@ -112,8 +123,11 @@ async def main():
                 }
                 await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
             
-            # Add assistant response to history
-            conversation_history.append({"role": "assistant", "content": full_response})
+            try:
+                await nc.publish("hippocampe.history.add", json.dumps({"role": "assistant", "content": full_response}).encode())
+            except Exception as e:
+                print(f"[Lobe Frontal] Erreur lors de l'enregistrement de l'historique assistant: {e}")
+                
             print("[Lobe Frontal] Fin de la génération.")
             
         except Exception as e:
