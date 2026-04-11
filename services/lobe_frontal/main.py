@@ -18,10 +18,75 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+nc = None
+
 # Configuration
 MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
+# Tool declarations
+tools = [
+    {
+    "type": "function",
+    "function": {
+        "name": "save_to_memory",
+        "description": "Called to save text to RAG memory",
+        "parameters": {
+        "type": "object",
+        "properties": {
+            "text": {
+            "type": "string",
+            "description": "The text to save to memory"
+            }
+        },
+        "required": ["text"]
+        }
+    }
+    },
+    {
+    "type": "function",
+    "function": {
+        "name": "get_from_memory",
+        "description": "Called to get relevant information from memory",
+        "parameters": {
+        "type": "object",
+        "properties": {
+            "prompt": {
+            "type": "string",
+            "description": "The prompt or word to search related information from memory"
+            }
+        },
+        "required": ["prompt"]
+        }
+    }
+    }
+]
+
+
+async def save_to_memory(text: str):
+    """Save text to RAG memory by calling hippocampe.rag.add"""
+    try:
+        response = await nc.request("hippocampe.rag.add", json.dumps({"content": text}).encode(), timeout=5.0)
+        return json.loads(response.data.decode())["result"]
+    except Exception as e:
+        logger.error(f"Erreur lors de l'enregistrement dans la mémoire: {e}")
+        return ""
+
+async def get_from_memory(prompt: str):
+    """Get relevant information from memory by calling hippocampe.rag.query"""
+    try:
+        response = await nc.request("hippocampe.rag.query", json.dumps({"prompt": prompt}).encode(), timeout=5.0)
+        return json.loads(response.data.decode())["result"]
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération de la mémoire: {e}")
+        return ""
+
+available_functions = {
+    "save_to_memory": save_to_memory,
+    "get_from_memory": get_from_memory
+}
+
 async def main():
+    global nc
     logger.info("🧠 Lobe Frontal en attente de connexion à NATS...")
     try:
         nc = await nats.connect("nats://localhost:4222")
@@ -78,77 +143,147 @@ async def main():
             logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
 
         logger.info("Génération LLM via Groq en cours...")
-        logger.debug("--- DÉBUT DES MESSAGES ENVOYÉS AU LLM ---")
-        logger.debug(json.dumps(messages, indent=2, ensure_ascii=False))
-        logger.debug("--- FIN DES MESSAGES ENVOYÉS AU LLM ---")
         
-        try:
-            stream = await groq_client.chat.completions.create(
-                messages=messages,
-                model=MODEL,
-                stream=True,
-            )
-            
-            buffer = ""
-            sequence = 0
-            full_response = ""
-            
-            # Ponctuation forte pour découper les phrases
-            punctuation_pattern = re.compile(r'([.!?\n]+)')
-            
-            async for chunk in stream:
-                token = chunk.choices[0].delta.content
-                if token:
-                    buffer += token
-                    full_response += token
-                    
-                    # Vérifier si on a une ponctuation forte
-                    match = punctuation_pattern.search(buffer)
-                    if match:
-                        end_index = match.end()
-                        fragment = buffer[:end_index].strip()
-                        buffer = buffer[end_index:]
-                        
-                        if fragment:
-                            payload = {
-                                "sequence": sequence,
-                                "text": fragment,
-                                "is_last": False
-                            }
-                            await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
-                            logger.debug(f"Fragment envoyé : {fragment}")
-                            sequence += 1
-
-            # Envoyer le reste du buffer s'il y a lieu
-            if buffer.strip():
-                payload = {
-                    "sequence": sequence,
-                    "text": buffer.strip(),
-                    "is_last": True
-                }
-                await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
-                logger.debug(f"Dernier fragment envoyé : {buffer.strip()}")
-            else:
-                # Envoyer un fragment vide pour signaler la fin si on n'a plus rien
-                payload = {
-                    "sequence": sequence,
-                    "text": "",
-                    "is_last": True
-                }
-                await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
+        sequence = 0
+        overall_full_response = ""
+        
+        MAX_TURNS = 5
+        turn_count = 0
+        
+        while turn_count < MAX_TURNS:
+            turn_count += 1
+            logger.debug("--- DÉBUT DES MESSAGES ENVOYÉS AU LLM ---")
+            logger.debug(json.dumps(messages, indent=2, ensure_ascii=False))
+            logger.debug("--- FIN DES MESSAGES ENVOYÉS AU LLM ---")
             
             try:
-                logger.debug(f"Enregistrement de la réponse complète dans l'historique : {full_response}")
-                await nc.publish("hippocampe.history.add", json.dumps({"role": "assistant", "content": full_response}).encode())
-            except Exception as e:
-                logger.error(f"Erreur lors de l'enregistrement de l'historique assistant: {e}")
+                stream = await groq_client.chat.completions.create(
+                    messages=messages,
+                    model=MODEL,
+                    tools=tools,
+                    stream=True,
+                )
                 
-            logger.info("Fin de la génération.")
-            
+                buffer = ""
+                turn_response = ""
+                
+                # Ponctuation forte pour découper les phrases
+                punctuation_pattern = re.compile(r'([.!?\n]+)')
+                
+                tool_calls = []
+                
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                        
+                    delta = chunk.choices[0].delta
+                    
+                    if getattr(delta, "tool_calls", None):
+                        for tc in delta.tool_calls:
+                            while len(tool_calls) <= tc.index:
+                                tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if getattr(tc, "id", None):
+                                tool_calls[tc.index]["id"] = tc.id
+                            if getattr(tc, "function", None):
+                                if getattr(tc.function, "name", None):
+                                    tool_calls[tc.index]["function"]["name"] += tc.function.name
+                                if getattr(tc.function, "arguments", None):
+                                    tool_calls[tc.index]["function"]["arguments"] += tc.function.arguments
+                    
+                    token = getattr(delta, "content", None)
+                    if token:
+                        buffer += token
+                        turn_response += token
+                        overall_full_response += token
+                        
+                        # Vérifier si on a une ponctuation forte
+                        match = punctuation_pattern.search(buffer)
+                        if match:
+                            end_index = match.end()
+                            fragment = buffer[:end_index].strip()
+                            buffer = buffer[end_index:]
+                            
+                            if fragment:
+                                payload = {
+                                    "sequence": sequence,
+                                    "text": fragment,
+                                    "is_last": False
+                                }
+                                await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
+                                logger.debug(f"Fragment envoyé : {fragment}")
+                                sequence += 1
+
+                if tool_calls:
+                    # Append assistant message with tool calls
+                    assistant_msg = {
+                        "role": "assistant",
+                        "tool_calls": tool_calls
+                    }
+                    if turn_response:
+                        assistant_msg["content"] = turn_response
+                    messages.append(assistant_msg)
+                    
+                    for tc in tool_calls:
+                        logger.info(f"Appel du tool: {tc['function']['name']}")
+                        function_name = tc["function"]["name"]
+                        function_to_call = available_functions.get(function_name)
+                        if function_to_call:
+                            try:
+                                arguments = json.loads(tc["function"]["arguments"])
+                                result = await function_to_call(**arguments)
+                            except json.JSONDecodeError as e:
+                                result = f"Erreur de décodage JSON des arguments : {e}"
+                                logger.error(f"Erreur JSON tool {function_name}: {e}\nArguments: {tc['function']['arguments']}")
+                            except Exception as e:
+                                result = f"Erreur de la fonction : {e}"
+                                logger.error(f"Erreur d'exécution tool {function_name}: {e}")
+                        else:
+                            result = f"Erreur: Fonction inconnue {function_name}"
+                            logger.error(f"Fonction introuvable : {function_name}")
+                            
+                        logger.debug(f"Résultat du tool {function_name} : {result}")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "name": function_name,
+                            "content": str(result)
+                        })
+                        
+                    # Continue loop to call LLM again with tool results
+                    continue
+                else:
+                    # No more tool calls, flush buffer and we're done
+                    if buffer.strip():
+                        payload = {
+                            "sequence": sequence,
+                            "text": buffer.strip(),
+                            "is_last": True
+                        }
+                        await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
+                        logger.debug(f"Dernier fragment envoyé : {buffer.strip()}")
+                    else:
+                        payload = {
+                            "sequence": sequence,
+                            "text": "",
+                            "is_last": True
+                        }
+                        await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
+                    
+                    break # Exit while loop
+                    
+            except Exception as e:
+                logger.exception(f"Erreur lors de la génération Groq: {e}")
+                payload = {"sequence": sequence, "text": "Erreur de génération.", "is_last": True}
+                await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
+                break
+                
+        try:
+            logger.debug(f"Enregistrement de la réponse complète dans l'historique : {overall_full_response}")
+            await nc.publish("hippocampe.history.add", json.dumps({"role": "assistant", "content": overall_full_response}).encode())
         except Exception as e:
-            logger.exception(f"Erreur lors de la génération Groq: {e}")
-            payload = {"sequence": 0, "text": f"Erreur de génération.", "is_last": True}
-            await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
+            logger.error(f"Erreur lors de l'enregistrement de l'historique assistant: {e}")
+            
+        logger.info("Fin de la génération.")
 
     # 4. Souscription aux requêtes du cortex
     await nc.subscribe("cortex.prompt", cb=prompt_handler)
