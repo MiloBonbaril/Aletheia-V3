@@ -17,7 +17,7 @@ TOKEN = Config.DISCORD_TOKEN
 USER_ID = Config.USER_ID
 
 # Liste centrale des cogs à gérer
-COGS = ["special_message", "bets"]
+COGS = ["special_message", "bets", "text"]
 
 logger_voice = logging.getLogger('discord.voice_client')
 logger_voice.setLevel(logging.DEBUG)

@@ -1,12 +1,10 @@
-import asyncio
-import io
-import json
 import logging
 import sys
-import time
-from collections import deque
-from typing import Deque, Dict, Optional
+import json
+import asyncio
+from typing import Optional
 
+import nats
 import discord
 from discord.ext import commands
 
@@ -15,6 +13,13 @@ from config import Config
 
 
 class Text(commands.Cog):
+    # commands group
+    text = discord.SlashCommandGroup(
+        "text",
+        "Commands for the text cog",
+        guild_ids=[Config.GUILD_ID],
+    )
+    
     def __init__(self, bot: commands.Bot) -> None:
         super().__init__()
         self.bot = bot
@@ -28,8 +33,38 @@ class Text(commands.Cog):
 
         self.logger.info("Text cog initialized.")
 
+        self.chat_activated = False
+        self.nc = None
+        self.active_channel = None
+
+        # Initiate NATS
+        self.bot.loop.create_task(self.setup_nats())
+
+    async def setup_nats(self):
+        try:
+            self.nc = await nats.connect("nats://localhost:4222")
+            self.logger.info("Connected to NATS.")
+            await self.nc.subscribe("lobe.fragment_stream", cb=self.on_fragment)
+        except Exception as e:
+            self.logger.error(f"Failed to connect to NATS: {e}")
+
+    async def on_fragment(self, msg) -> None:
+        if not self.chat_activated or not self.active_channel:
+            return
+            
+        data = json.loads(msg.data.decode())
+        text_fragment = data.get("text", "")
+        
+        if text_fragment:
+            try:
+                await self.active_channel.send(text_fragment)
+            except Exception as e:
+                self.logger.error(f"Error sending fragment to Discord: {e}")
+
     def cleanup(self) -> None:
         self.logger.info("Cleaning up Text cog resources.")
+        if self.nc and not self.nc.is_closed:
+            self.bot.loop.create_task(self.nc.close())
         self.logger.handlers.clear()
 
     @commands.Cog.listener()
@@ -43,9 +78,18 @@ class Text(commands.Cog):
         if message.author.bot or message.author == self.bot.user:
             return
 
-        if not message.content and not message.stickers:
+        if not message.content: # and not message.stickers:
             return
-        channel_id = message.channel.id
+            
+        self.active_channel = message.channel
+
+        if self.nc:
+            formatted_msg = f"{message.author.display_name} said: {message.content}"
+            payload = {"text": formatted_msg}
+            try:
+                await self.nc.publish("io.user.msg.text", json.dumps(payload).encode())
+            except Exception as e:
+                self.logger.error(f"Failed to publish to NATS: {e}")
 
     @text.command(
         guild_ids=[Config.GUILD_ID],
