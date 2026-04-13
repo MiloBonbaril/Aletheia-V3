@@ -26,38 +26,50 @@ MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 # Tool declarations
 tools = [
     {
-    "type": "function",
-    "function": {
-        "name": "save_to_memory",
-        "description": "Called to save text to RAG memory",
-        "parameters": {
-        "type": "object",
-        "properties": {
-            "text": {
-            "type": "string",
-            "description": "The text to save to memory"
+        "type": "function",
+        "function": {
+            "name": "save_to_memory",
+            "description": "Call this tool to save text to RAG memory, please use it to save only important memories",
+            "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                "type": "string",
+                "description": "The text to save to memory"
+                }
+            },
+            "required": ["text"]
             }
-        },
-        "required": ["text"]
         }
-    }
     },
     {
-    "type": "function",
-    "function": {
-        "name": "get_from_memory",
-        "description": "Called to get relevant information from memory",
-        "parameters": {
-        "type": "object",
-        "properties": {
-            "prompt": {
-            "type": "string",
-            "description": "The prompt or word to search related information from memory"
+        "type": "function",
+        "function": {
+            "name": "get_from_memory",
+            "description": "Call this tool to get relevant information to a prompt or a word from RAG memory. Please call this tool (if needed) before answering something.",
+            "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                "type": "string",
+                "description": "The prompt or word to search related information from memory"
+                }
+            },
+            "required": ["prompt"]
             }
-        },
-        "required": ["prompt"]
         }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stay_silent",
+            "description": "Call this tool IMMEDIATELY if you decide you do not want to respond to the user, if you are ignoring them, or if you were explicitly told to be quiet. Do not output any text if you call this.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]
 
@@ -79,6 +91,37 @@ async def get_from_memory(prompt: str):
     except Exception as e:
         logger.error(f"Erreur lors de la récupération de la mémoire: {e}")
         return ""
+
+async def execute_tool_calls(tool_calls: list[dict], sequence) -> list[dict]:
+    results = []
+    for tool_call in tool_calls:
+        function_name = tool_call.function.name
+        function_args = json.loads(tool_call.function.arguments)
+        tool_call_id = tool_call.id
+        logger.info(f"Appel du tool: {function_name}")
+
+        if function_name == "stay_silent":
+            logger.info("🤫 Aletheia active le silence radio.")
+            # On publie un événement vide pour clore proprement le flux si besoin
+            await nc.publish("lobe.fragment_stream", json.dumps({"sequence": sequence, "text": "", "is_last": True}).encode())
+            return None # Ou break le while principal si quelque chose derrière
+
+        logger.info(f"Executing tool call: {function_name} with arguments: {function_args}")
+
+        if function_name not in available_functions:
+            raise ValueError(f"Unknown tool call: {function_name}")
+
+        function_response = await available_functions[function_name](**function_args)
+
+        results.append(
+            {
+                "tool_call_id": tool_call_id,
+                "role": "tool",
+                "name": function_name,
+                "content": function_response,
+            }
+        )
+    return results
 
 available_functions = {
     "save_to_memory": save_to_memory,
@@ -171,25 +214,21 @@ async def main():
                 punctuation_pattern = re.compile(r'([.!?\n]+)')
                 
                 tool_calls = []
+                collected_content = ""
+                finish_reason = None
                 
                 async for chunk in stream:
                     if not chunk.choices:
                         continue
                         
                     delta = chunk.choices[0].delta
-                    
-                    if getattr(delta, "tool_calls", None):
-                        for tc in delta.tool_calls:
-                            while len(tool_calls) <= tc.index:
-                                tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                            if getattr(tc, "id", None):
-                                tool_calls[tc.index]["id"] = tc.id
-                            if getattr(tc, "function", None):
-                                if getattr(tc.function, "name", None):
-                                    tool_calls[tc.index]["function"]["name"] += tc.function.name
-                                if getattr(tc.function, "arguments", None):
-                                    tool_calls[tc.index]["function"]["arguments"] += tc.function.arguments
-                    
+                    if chunk.choices[0].delta.content:
+                        collected_content += chunk.choices[0].delta.content
+                    if chunk.choices[0].delta.tool_calls:
+                        tool_calls.extend(chunk.choices[0].delta.tool_calls)
+                    if chunk.choices[0].finish_reason:
+                        finish_reason = chunk.choices[0].finish_reason
+
                     token = getattr(delta, "content", None)
                     if token:
                         buffer += token
@@ -213,44 +252,16 @@ async def main():
                                 logger.debug(f"Fragment envoyé : {fragment}")
                                 sequence += 1
 
-                if tool_calls:
-                    # Append assistant message with tool calls
-                    assistant_msg = {
-                        "role": "assistant",
-                        "tool_calls": tool_calls
-                    }
-                    if turn_response:
-                        assistant_msg["content"] = turn_response
-                    messages.append(assistant_msg)
-                    
-                    for tc in tool_calls:
-                        logger.info(f"Appel du tool: {tc['function']['name']}")
-                        function_name = tc["function"]["name"]
-                        function_to_call = available_functions.get(function_name)
-                        if function_to_call:
-                            try:
-                                arguments = json.loads(tc["function"]["arguments"])
-                                result = await function_to_call(**arguments)
-                            except json.JSONDecodeError as e:
-                                result = f"Erreur de décodage JSON des arguments : {e}"
-                                logger.error(f"Erreur JSON tool {function_name}: {e}\nArguments: {tc['function']['arguments']}")
-                            except Exception as e:
-                                result = f"Erreur de la fonction : {e}"
-                                logger.error(f"Erreur d'exécution tool {function_name}: {e}")
-                        else:
-                            result = f"Erreur: Fonction inconnue {function_name}"
-                            logger.error(f"Fonction introuvable : {function_name}")
-                            
-                        logger.debug(f"Résultat du tool {function_name} : {result}")
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc["id"],
-                            "name": function_name,
-                            "content": str(result)
-                        })
-                        
-                    # Continue loop to call LLM again with tool results
+                if tool_calls and finish_reason == "tool_calls":
+                    logger.info(f"Turn {turn_count + 1}: Executing tool calls")
+                    results = await execute_tool_calls(tool_calls, sequence)
+                    if results is None:
+                        return # stay silent
+                    # append results to messages
+                    messages.extend(results)
+                    turn_count += 1
                     continue
+
                 else:
                     # No more tool calls, flush buffer and we're done
                     if buffer.strip():
