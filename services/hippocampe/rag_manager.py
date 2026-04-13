@@ -43,7 +43,7 @@ class RAGManager:
                     )
                 ]
             )
-            return "Memory saved successfully."
+            return f"Successfully saved: \"{content}\" in the RAG memory."
         except Exception as e:
             return f"Error saving memory: {e}"
 
