@@ -22,6 +22,11 @@ nc = None
 
 # Configuration
 MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+REASONING_EFFORT=os.getenv("REASONING_EFFORT", "default")
+TEMPERATURE=float(os.getenv("TEMPERATURE", 0.6))
+TOP_P=float(os.getenv("TOP_P", 0.95))
+TOP_K=int(os.getenv("TOP_K", 20))
+MIN_P=os.getenv("MIN_P", 0)
 
 # Tool declarations
 tools = [
@@ -29,13 +34,13 @@ tools = [
         "type": "function",
         "function": {
             "name": "save_to_memory",
-            "description": "Call this tool to save text to RAG memory, please use it to save only important memories",
+            "description": "Call this tool to save text to RAG memory, please use it to save only important memories like information on someone, or the meaning of a word. Please be sure to use get_from_memory to avoid duplicate",
             "parameters": {
             "type": "object",
             "properties": {
                 "text": {
                 "type": "string",
-                "description": "The text to save to memory"
+                "description": "The text to save inside your RAG memory"
                 }
             },
             "required": ["text"]
@@ -46,13 +51,13 @@ tools = [
         "type": "function",
         "function": {
             "name": "get_from_memory",
-            "description": "Call this tool to get relevant information to a prompt or a word from RAG memory. Please call this tool (if needed) before answering something.",
+            "description": "Call this tool to get relevant information to a prompt or a word from RAG memory. Please call this tool (if needed) before answering something. Please use this tool ONLY to remember someone or the meaning of a word.",
             "parameters": {
             "type": "object",
             "properties": {
                 "prompt": {
                 "type": "string",
-                "description": "The prompt or word to search related information from memory"
+                "description": "The prompt or word to search related information from your RAG memory"
                 }
             },
             "required": ["prompt"]
@@ -205,6 +210,12 @@ async def main():
                     model=MODEL,
                     tools=tools,
                     stream=True,
+                    temperature=TEMPERATURE,
+                    top_p=TOP_P,
+                    reasoning_effort=REASONING_EFFORT,
+                    #seed=42,
+                    #logprobs=True,
+                    #top_logprobs=TOP_K
                 )
                 
                 buffer = ""
@@ -259,7 +270,7 @@ async def main():
                         return # stay silent
                     # append results to messages
                     messages.extend(results)
-                    turn_count += 1
+                    finish_reason = None
                     continue
 
                 else:
