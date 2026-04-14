@@ -12,15 +12,29 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger("LobeFrontal")
+
 from nats.errors import ConnectionClosedError, TimeoutError, NoServersError
-from groq import AsyncGroq
 from dotenv import load_dotenv
+from Groq.interface import GroqInterface
+from OpenAI.interface import OpenAIInterface
 
 load_dotenv()
 
 nc = None
 
 # Configuration
+INTERFACE_NAME = os.getenv("INTERFACE", "groq")
+if INTERFACE_NAME == "groq":
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if not groq_api_key:
+        logger.warning("⚠️ Attention: GROQ_API_KEY introuvable dans .env")
+    interface = GroqInterface(groq_api_key)
+elif INTERFACE_NAME == "openai" or INTERFACE_NAME == "llama":
+    interface = OpenAIInterface()
+else:
+    logger.error(f"Interface '{INTERFACE_NAME}' non reconnue.")
+    raise ValueError(f"Interface '{INTERFACE_NAME}' non reconnue.")
+
 MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 REASONING_EFFORT=os.getenv("REASONING_EFFORT", "default")
 TEMPERATURE=float(os.getenv("TEMPERATURE", 0.6))
@@ -97,12 +111,28 @@ async def get_from_memory(prompt: str):
         logger.error(f"Erreur lors de la récupération de la mémoire: {e}")
         return ""
 
-async def execute_tool_calls(tool_calls: list[dict], sequence) -> list[dict]:
+async def execute_tool_calls(tool_calls: list, sequence) -> list[dict]:
     results = []
     for tool_call in tool_calls:
-        function_name = tool_call.function.name
-        function_args = json.loads(tool_call.function.arguments)
-        tool_call_id = tool_call.id
+        if isinstance(tool_call, dict):
+            function_name = tool_call.get("function", {}).get("name")
+            arguments_str = tool_call.get("function", {}).get("arguments", "{}")
+            tool_call_id = tool_call.get("id")
+        else:
+            function_name = tool_call.function.name
+            arguments_str = tool_call.function.arguments
+            tool_call_id = tool_call.id
+
+        if not arguments_str:
+            arguments_str = "{}"
+            
+        try:
+            function_args = json.loads(arguments_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"Erreur de décodage JSON pour les arguments du tool {function_name}: {arguments_str} - {e}")
+            function_args = {}
+            
+
         logger.info(f"Appel du tool: {function_name}")
 
         if function_name == "stay_silent":
@@ -144,16 +174,6 @@ async def main():
 
     logger.info("✅ Lobe Frontal connecté au système nerveux (NATS).")
 
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    if not groq_api_key:
-        logger.warning("⚠️ Attention: GROQ_API_KEY introuvable dans .env")
-    
-    try:
-        groq_client = AsyncGroq(api_key=groq_api_key)
-    except Exception as e:
-        logger.error(f"Erreur d'initialisation de Groq: {e}")
-        return
-
     # 2. Handler pour les prompts
     async def prompt_handler(msg):
         subject = msg.subject
@@ -190,7 +210,7 @@ async def main():
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
 
-        logger.info("Génération LLM via Groq en cours...")
+        logger.info("Génération LLM en cours...")
         
         sequence = 0
         overall_full_response = ""
@@ -205,18 +225,7 @@ async def main():
             logger.debug("--- FIN DES MESSAGES ENVOYÉS AU LLM ---")
             
             try:
-                stream = await groq_client.chat.completions.create(
-                    messages=messages,
-                    model=MODEL,
-                    tools=tools,
-                    stream=True,
-                    temperature=TEMPERATURE,
-                    top_p=TOP_P,
-                    reasoning_effort=REASONING_EFFORT,
-                    #seed=42,
-                    #logprobs=True,
-                    #top_logprobs=TOP_K
-                )
+                stream = await interface.get_stream(messages, MODEL, tools, TEMPERATURE, TOP_P, REASONING_EFFORT)
                 
                 buffer = ""
                 turn_response = ""
@@ -224,7 +233,7 @@ async def main():
                 # Ponctuation forte pour découper les phrases
                 punctuation_pattern = re.compile(r'([.!?\n]+)')
                 
-                tool_calls = []
+                tool_calls_dict = {}
                 collected_content = ""
                 finish_reason = None
                 
@@ -233,10 +242,29 @@ async def main():
                         continue
                         
                     delta = chunk.choices[0].delta
-                    if chunk.choices[0].delta.content:
-                        collected_content += chunk.choices[0].delta.content
-                    if chunk.choices[0].delta.tool_calls:
-                        tool_calls.extend(chunk.choices[0].delta.tool_calls)
+                    if getattr(delta, "content", None):
+                        collected_content += delta.content
+                    
+                    if getattr(delta, "tool_calls", None):
+                        for tc_chunk in delta.tool_calls:
+                            idx = tc_chunk.index
+                            if idx not in tool_calls_dict:
+                                tool_calls_dict[idx] = {
+                                    "id": getattr(tc_chunk, "id", "") or "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": getattr(tc_chunk.function, "name", "") or "",
+                                        "arguments": getattr(tc_chunk.function, "arguments", "") or ""
+                                    }
+                                }
+                            else:
+                                if getattr(tc_chunk, "id", None):
+                                    tool_calls_dict[idx]["id"] = tc_chunk.id
+                                if getattr(tc_chunk.function, "name", None):
+                                    tool_calls_dict[idx]["function"]["name"] += tc_chunk.function.name
+                                if getattr(tc_chunk.function, "arguments", None):
+                                    tool_calls_dict[idx]["function"]["arguments"] += tc_chunk.function.arguments
+
                     if chunk.choices[0].finish_reason:
                         finish_reason = chunk.choices[0].finish_reason
 
@@ -263,13 +291,32 @@ async def main():
                                 logger.debug(f"Fragment envoyé : {fragment}")
                                 sequence += 1
 
+                tool_calls = list(tool_calls_dict.values())
                 if tool_calls and finish_reason == "tool_calls":
                     logger.info(f"Turn {turn_count + 1}: Executing tool calls")
+                    
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": collected_content or None,
+                        "tool_calls": tool_calls
+                    }
+                    messages.append(assistant_msg)
+                    
                     results = await execute_tool_calls(tool_calls, sequence)
                     if results is None:
                         return # stay silent
                     # append results to messages
                     messages.extend(results)
+                    try:
+                        for r in results:
+                            if r["name"] == "get_from_memory":
+                                result = {
+                                    "role": "tool",
+                                    "content": r["content"]
+                                }
+                                await nc.publish("hippocampe.history.add", json.dumps(result).encode())
+                    except Exception as e:
+                        logger.error(f"Erreur lors de l'enregistrement du résultat du tool: {e}")
                     finish_reason = None
                     continue
 
@@ -294,7 +341,7 @@ async def main():
                     break # Exit while loop
                     
             except Exception as e:
-                logger.exception(f"Erreur lors de la génération Groq: {e}")
+                logger.exception(f"Erreur lors de la génération: {e}")
                 payload = {"sequence": sequence, "text": "Erreur de génération.", "is_last": True}
                 await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
                 break
