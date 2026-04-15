@@ -89,8 +89,11 @@ async fn main() -> Result<(), async_nats::Error> {
         }
     });
 
-    // Maintien du processus en vie sur les deux threads asynchrones
-    let _ = tokio::try_join!(user_task, fragment_task);
+    // Fini le suicide silencieux, place à la haute résilience
+    if let Err(e) = tokio::try_join!(user_task, fragment_task) {
+        eprintln!("[Cortex] 💀 PANIQUE CRITIQUE: Un thread interne s'est effondré: {:?}", e);
+        std::process::exit(1); // Émission du signal de redémarrage (OS level)
+    }
 
     Ok(())
 }

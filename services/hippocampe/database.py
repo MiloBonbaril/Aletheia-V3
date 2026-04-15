@@ -1,6 +1,6 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, Integer, String, Text, DateTime, text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.future import select
 from datetime import datetime
@@ -19,7 +19,7 @@ class Message(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     role = Column(String(50), nullable=False) # 'user', 'assistant', 'system' (though system is dynamic so mostly user/assistant)
     content = Column(Text, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
 # Pool massif géré par l'Event Loop
 engine = create_async_engine(POSTGRES_URL, pool_size=20, max_overflow=10, echo=False)
@@ -28,6 +28,8 @@ AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Création rétroactive absolue de l'index B-Tree pour les données préexistantes 
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_messages_timestamp ON messages (timestamp DESC);"))
 
 async def add_message(role: str, content: str):
     async with AsyncSessionLocal() as db:
