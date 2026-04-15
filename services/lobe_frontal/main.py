@@ -21,6 +21,7 @@ from OpenAI.interface import OpenAIInterface
 load_dotenv()
 
 nc = None
+PUNCTUATION_PATTERN = re.compile(r'([.!?\n]+)')
 
 # Configuration
 INTERFACE_NAME = os.getenv("INTERFACE", "groq")
@@ -213,7 +214,7 @@ async def main():
         logger.info("Génération LLM en cours...")
         
         sequence = 0
-        overall_full_response = ""
+        overall_response_fragments = []
         
         MAX_TURNS = 10
         turn_count = 0
@@ -227,11 +228,7 @@ async def main():
             try:
                 stream = await interface.get_stream(messages, MODEL, tools, TEMPERATURE, TOP_P, REASONING_EFFORT)
                 
-                buffer = ""
-                turn_response = ""
-                
-                # Ponctuation forte pour découper les phrases
-                punctuation_pattern = re.compile(r'([.!?\n]+)')
+                fragments_buffer = []
                 
                 tool_calls_dict = {}
                 collected_content = ""
@@ -270,16 +267,16 @@ async def main():
 
                     token = getattr(delta, "content", None)
                     if token:
-                        buffer += token
-                        turn_response += token
-                        overall_full_response += token
+                        fragments_buffer.append(token)
+                        overall_response_fragments.append(token)
                         
+                        current_buffer_str = "".join(fragments_buffer)
                         # Vérifier si on a une ponctuation forte
-                        match = punctuation_pattern.search(buffer)
+                        match = PUNCTUATION_PATTERN.search(current_buffer_str)
                         if match:
                             end_index = match.end()
-                            fragment = buffer[:end_index].strip()
-                            buffer = buffer[end_index:]
+                            fragment = current_buffer_str[:end_index].strip()
+                            fragments_buffer = [current_buffer_str[end_index:]]
                             
                             if fragment:
                                 payload = {
@@ -322,14 +319,15 @@ async def main():
 
                 else:
                     # No more tool calls, flush buffer and we're done
-                    if buffer.strip():
+                    current_buffer_str = "".join(fragments_buffer)
+                    if current_buffer_str.strip():
                         payload = {
                             "sequence": sequence,
-                            "text": buffer.strip(),
+                            "text": current_buffer_str.strip(),
                             "is_last": True
                         }
                         await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
-                        logger.debug(f"Dernier fragment envoyé : {buffer.strip()}")
+                        logger.debug(f"Dernier fragment envoyé : {current_buffer_str.strip()}")
                     else:
                         payload = {
                             "sequence": sequence,
@@ -346,6 +344,7 @@ async def main():
                 await nc.publish("lobe.fragment_stream", json.dumps(payload).encode())
                 break
                 
+        overall_full_response = "".join(overall_response_fragments)
         try:
             logger.debug(f"Enregistrement de la réponse complète dans l'historique : {overall_full_response}")
             await nc.publish("hippocampe.history.add", json.dumps({"role": "assistant", "content": overall_full_response}).encode())

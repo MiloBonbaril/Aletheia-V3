@@ -1,13 +1,15 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.future import select
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # We setup the postgresql engine
-POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql://aletheia:aletheia_password@localhost:5432/hippocampe")
+POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql+asyncpg://aletheia:aletheia_password@localhost:5432/hippocampe")
 
 Base = declarative_base()
 
@@ -19,32 +21,32 @@ class Message(Base):
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-engine = create_engine(POSTGRES_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Pool massif géré par l'Event Loop
+engine = create_async_engine(POSTGRES_URL, pool_size=20, max_overflow=10, echo=False)
+AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
-def init_db():
-    Base.metadata.create_all(bind=engine)
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-def add_message(role: str, content: str):
-    db = SessionLocal()
-    try:
-        new_msg = Message(role=role, content=content)
-        db.add(new_msg)
-        db.commit()
-    except Exception as e:
-        print(f"Error adding message to db: {e}")
-        db.rollback()
-    finally:
-        db.close()
+async def add_message(role: str, content: str):
+    async with AsyncSessionLocal() as db:
+        try:
+            new_msg = Message(role=role, content=content)
+            db.add(new_msg)
+            await db.commit() # Relaxe le GIL pendant l'attente I/O réseau
+        except Exception as e:
+            print(f"Error adding message to db: {e}")
+            await db.rollback()
 
-def get_recent_history(n: int = 10):
-    db = SessionLocal()
-    try:
-        messages = db.query(Message).order_by(Message.timestamp.desc()).limit(n).all()
-        # They come out newest first, so we reverse it to chronological
-        return [{"role": msg.role, "content": msg.content} for msg in reversed(messages)]
-    except Exception as e:
-        print(f"Error getting history: {e}")
-        return []
-    finally:
-        db.close()
+async def get_recent_history(n: int = 10):
+    async with AsyncSessionLocal() as db:
+        try:
+            stmt = select(Message.role, Message.content).order_by(Message.timestamp.desc()).limit(n)
+            result = await db.execute(stmt)
+            messages_list = [{"role": row.role, "content": row.content} for row in result.all()]
+            messages_list.reverse() # In-place reversal, 0 overhead GC
+            return messages_list
+        except Exception as e:
+            print(f"Error getting history: {e}")
+            return []

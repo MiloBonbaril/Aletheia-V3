@@ -7,21 +7,20 @@ from database import init_db, add_message, get_recent_history
 from rag_manager import rag_manager
 
 # Init db with retry for docker startup
-def try_init_db():
+async def try_init_db():
     max_retries = 5
     for i in range(max_retries):
         try:
-            init_db()
+            await init_db()
             print("Base de données initialisée.")
             return
         except Exception as e:
             print(f"La base de données n'est pas encore prête... ({i+1}/{max_retries})")
-            time.sleep(2)
+            await asyncio.sleep(2)
     print("Échec de connexion à la base de données après plusieurs tentatives.")
-
-try_init_db()
-
 async def main():
+    await try_init_db()
+
     print("🧠 Hippocampe en attente de connexion à NATS...")
     try:
         nc = await nats.connect("nats://localhost:4222")
@@ -59,7 +58,7 @@ async def main():
     async def get_context_handler(msg):
         print("[Hippocampe] Requête de contexte reçue.")
         system_prompt = read_context_files()
-        history = get_recent_history(20)
+        history = await get_recent_history(20)
         
         response = {
             "system_prompt": system_prompt,
@@ -73,7 +72,7 @@ async def main():
         content = data.get("content")
         print(f"[Hippocampe] Ajout historique ({role})")
         if role and content:
-            add_message(role, content)
+            await add_message(role, content)
 
     async def rag_query_handler(msg):
         data = json.loads(msg.data.decode())
