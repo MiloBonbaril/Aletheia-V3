@@ -59,7 +59,7 @@ async def main():
     async def get_context_handler(msg):
         print("[Hippocampe] Requête de contexte reçue.")
         system_prompt = read_context_files()
-        history = get_recent_history(10)
+        history = get_recent_history(20)
         
         response = {
             "system_prompt": system_prompt,

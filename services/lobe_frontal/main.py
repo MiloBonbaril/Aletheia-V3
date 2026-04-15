@@ -47,25 +47,8 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "save_to_memory",
-            "description": "Call this tool to save text to RAG memory, please use it to save only important memories like information on someone, or the meaning of a word. Please be sure to use get_from_memory to avoid duplicate",
-            "parameters": {
-            "type": "object",
-            "properties": {
-                "text": {
-                "type": "string",
-                "description": "The text to save inside your RAG memory"
-                }
-            },
-            "required": ["text"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_from_memory",
-            "description": "Call this tool to get relevant information to a prompt or a word from RAG memory. Please call this tool (if needed) before answering something. Please use this tool ONLY to remember someone or the meaning of a word.",
+            "description": "Call this tool to get relevant information to a prompt or a word from RAG memory. Please call this tool before answering something. It is advised to use this tool often, even before every response.",
             "parameters": {
             "type": "object",
             "properties": {
@@ -75,6 +58,23 @@ tools = [
                 }
             },
             "required": ["prompt"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_to_memory",
+            "description": "Call this tool to save text to RAG memory. Please be absolutely sure to use get_from_memory before to avoid duplicates.",
+            "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                "type": "string",
+                "description": "The text to save inside your RAG memory"
+                }
+            },
+            "required": ["text"]
             }
         }
     },
@@ -215,7 +215,7 @@ async def main():
         sequence = 0
         overall_full_response = ""
         
-        MAX_TURNS = 5
+        MAX_TURNS = 10
         turn_count = 0
         
         while turn_count < MAX_TURNS:
