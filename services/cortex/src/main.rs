@@ -1,7 +1,13 @@
 use async_nats::Client;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc, time::{SystemTime, UNIX_EPOCH}};
+use tokio::sync::mpsc;
+use tracing::{error, info, instrument, warn, Level};
+use tracing_subscriber::FmtSubscriber;
+use uuid::Uuid;
+
+// --- External Payloads (Boundary Contracts) ---
 
 #[derive(Serialize)]
 struct PromptPayload {
@@ -21,79 +27,230 @@ struct UserMsgPayload {
     text: String,
 }
 
+// --- Internal Architectural Contracts (The Blueprint) ---
+
+#[derive(Debug, Clone)]
+pub struct EventEnvelope {
+    pub correlation_id: Uuid,
+    pub session_id: String,
+    pub timestamp_ms: u128,
+    pub payload: EventPayload,
+}
+
+#[derive(Debug, Clone)]
+pub enum EventPayload {
+    PromptInbound(String),
+    LobeFragment { sequence: usize, text: String, is_last: bool },
+    FatalSystemError(String),
+}
+
+pub struct SessionContext {
+    pub start_time: u128,
+    pub total_fragments: usize,
+}
+
+pub struct CortexDispatcher {
+    pub active_sessions: Arc<dashmap::DashMap<String, SessionContext>>,
+    pub nats: Client,
+    pub ingestion_tx: mpsc::Sender<EventEnvelope>,
+}
+
+#[async_trait::async_trait]
+pub trait NeuralRouter {
+    async fn ingest_event(&self, event: EventEnvelope);
+    async fn flush_session(&self, session_id: &str);
+}
+
+impl CortexDispatcher {
+    pub fn new(nats: Client, ingestion_tx: mpsc::Sender<EventEnvelope>) -> Self {
+        Self {
+            active_sessions: Arc::new(dashmap::DashMap::new()),
+            nats,
+            ingestion_tx,
+        }
+    }
+
+    #[instrument(skip(self, payload), fields(correlation_id = %correlation_id))]
+    pub async fn process_envelope(&self, correlation_id: Uuid, session_id: &str, payload: EventPayload) {
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+
+        let event = EventEnvelope {
+            correlation_id,
+            session_id: session_id.to_string(),
+            timestamp_ms,
+            payload,
+        };
+
+        // Inject into the central nervous system (with backpressure via mpsc)
+        if let Err(e) = self.ingestion_tx.send(event).await {
+            error!("💀 FATAL: Central ingestion queue is completely saturated or dead: {}", e);
+        }
+    }
+}
+
+// --- Dispatcher Worker ---
+
+async fn run_dispatcher_worker(
+    mut rx: mpsc::Receiver<EventEnvelope>,
+    nats: Client,
+    active_sessions: Arc<dashmap::DashMap<String, SessionContext>>,
+) {
+    info!("🧠 Cortex Dispatcher (Actor) is online and ready for processing.");
+    
+    while let Some(event) = rx.recv().await {
+        let span = tracing::info_span!(
+            "dispatch",
+            corr = %event.correlation_id,
+            session = %event.session_id,
+        );
+        let _guard = span.enter();
+
+        match event.payload {
+            EventPayload::PromptInbound(text) => {
+                info!("📥 Routing inbound prompt (length: {})", text.len());
+                
+                // Track session start
+                active_sessions.insert(event.session_id.clone(), SessionContext {
+                    start_time: event.timestamp_ms,
+                    total_fragments: 0,
+                });
+
+                let prompt_msg = PromptPayload { prompt: text };
+                
+                if let Ok(payload_bytes) = serde_json::to_vec(&prompt_msg) {
+                    if let Err(e) = nats.publish("cortex.prompt", payload_bytes.into()).await {
+                        error!("⚠️ Failed to emit to Lobe Frontal: {}", e);
+                    } else {
+                        info!("📤 Prompt dispatched to Lobe Frontal successfully.");
+                    }
+                }
+            }
+            EventPayload::LobeFragment { sequence, text, is_last } => {
+                // Update session state
+                if let Some(mut ctx) = active_sessions.get_mut(&event.session_id) {
+                    ctx.total_fragments += 1;
+                }
+
+                info!("🧩 Routed fragment n°{} (len: {})", sequence, text.len());
+
+                if is_last {
+                    info!("✅ Session {} complete (End of transmission).", event.session_id);
+                    // In a more complex setup, we could flush caching or trigger other events here.
+                    active_sessions.remove(&event.session_id);
+                }
+            }
+            EventPayload::FatalSystemError(err) => {
+                error!("💀 PANIC EVENT within the stream: {}", err);
+            }
+        }
+    }
+    
+    warn!("Cortex Dispatcher worker loop terminated.");
+}
+
 #[tokio::main]
-async fn main() -> Result<(), async_nats::Error> {
-    println!("🧠 Cortex en cours de démarrage...");
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 1. Initialiser le tracing (Observabilité industrielle)
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("tracing init failed");
 
-    // 1. Connexion à NATS
-    let client: Client = async_nats::connect("nats://localhost:4222").await?;
-    println!("✅ Cortex connecté au système nerveux (NATS).");
+    info!("🚀 Initializing Cortex Hub Runtime (Chaos Optimized)...");
 
-    // 2. Souscription au stream de réponses du Lobe Frontal
-    let mut lobe_subscriber = client.subscribe("lobe.fragment_stream").await?;
-    println!("👂 Cortex en écoute sur 'lobe.fragment_stream'...");
+    // 2. NATS Connection (Résilience implicite via loop interne)
+    let nats_client = async_nats::connect("nats://localhost:4222").await?;
+    info!("✅ Cortex connected to the NATS nervous system.");
 
-    // 3. Souscription aux messages texte de l'utilisateur
-    let mut user_msg_subscriber = client.subscribe("io.user.msg.text").await?;
-    println!("👂 Cortex en écoute sur 'io.user.msg.text'...");
+    // 3. Backpressure & Rate Limiting (MPSC channel lock-free borné)
+    let (tx, rx) = mpsc::channel::<EventEnvelope>(1000); 
+    let active_sessions = Arc::new(dashmap::DashMap::new());
 
-    println!("\n[Cortex] Prêt et en attente d'événements...");
+    let dispatcher = Arc::new(CortexDispatcher {
+        active_sessions: active_sessions.clone(),
+        nats: nats_client.clone(),
+        ingestion_tx: tx,
+    });
 
-    let client_clone = client.clone(); // Le client nats est safe à cloner (cheap)
+    // 4. Spawn Actor Dispatcher
+    let nats_clone = nats_client.clone();
+    let sessions_clone = active_sessions.clone();
+    let dispatcher_handle = tokio::spawn(async move {
+        run_dispatcher_worker(rx, nats_clone, sessions_clone).await;
+    });
 
-    // Tâche 1 : Traitement du flux utilisateur, 100% isolée
-    let user_task = tokio::spawn(async move {
+    // 5. Ingestion IO -> Dispatcher
+    let mut user_msg_subscriber = nats_client.subscribe("io.user.msg.text").await?;
+    let dispatcher_io = dispatcher.clone();
+    let _io_handle = tokio::spawn(async move {
+        info!("👂 Cortex Ingress Listening on 'io.user.msg.text'...");
         while let Some(msg) = user_msg_subscriber.next().await {
-            // Supporte un JSON {"text": "..."} ou un texte brut
             let prompt_text = if let Ok(payload) = serde_json::from_slice::<UserMsgPayload>(&msg.payload) {
                 payload.text
             } else if let Ok(text_slice) = std::str::from_utf8(&msg.payload) {
                 text_slice.to_string()
             } else {
-                println!("[Cortex] ⚠️ Erreur: format de message utilisateur non supporté.");
+                warn!("⚠️ Ingression Error: Unsupported message format.");
                 continue;
             };
 
-            println!("\n[Cortex] 📥 Message utilisateur reçu: {}", prompt_text);
-            
-            let prompt_msg = PromptPayload {
-                prompt: prompt_text,
-            };
-        
-            if let Ok(payload) = serde_json::to_vec(&prompt_msg) {
-                println!("[Cortex] 📤 Envoi du prompt au Lobe Frontal...");
-                if let Err(e) = client_clone.publish("cortex.prompt", payload.into()).await {
-                    println!("[Cortex] ⚠️ Erreur lors de l'envoi au Lobe Frontal: {}", e);
-                }
-            }
+            let corr_id = Uuid::new_v4();
+            let session_id = "global_session".to_string(); // Extension point: parser depuis metadata nats plus tard
+
+            dispatcher_io.process_envelope(
+                corr_id,
+                &session_id,
+                EventPayload::PromptInbound(prompt_text)
+            ).await;
         }
     });
 
-    // Tâche 2 : Traitement du stream de fragments
-    let fragment_task = tokio::spawn(async move {
+    // 6. Ingestion Lobe -> Dispatcher
+    let mut lobe_subscriber = nats_client.subscribe("lobe.fragment_stream").await?;
+    let dispatcher_lobe = dispatcher.clone();
+    let _lobe_handle = tokio::spawn(async move {
+        info!("👂 Cortex Egress Listening on 'lobe.fragment_stream'...");
         while let Some(msg) = lobe_subscriber.next().await {
             match serde_json::from_slice::<FragmentPayload>(&msg.payload) {
                 Ok(fragment) => {
-                    println!("[Cortex] 🧩 Fragment reçu n°{} : {}", fragment.sequence, fragment.text);
+                    let corr_id = Uuid::new_v4();
+                    let session_id = "global_session".to_string(); 
                     
-                    if fragment.is_last {
-                        println!("[Cortex] ✅ Fin de transmission reçue du Lobe Frontal.\n");
-                    }
+                    dispatcher_lobe.process_envelope(
+                        corr_id,
+                        &session_id,
+                        EventPayload::LobeFragment {
+                            sequence: fragment.sequence,
+                            text: fragment.text.to_string(),
+                            is_last: fragment.is_last,
+                        }
+                    ).await;
                 },
                 Err(e) => {
-                    eprintln!("[Cortex] 💀 FATAL: Erreur de parsing JSON d'un fragment.");
-                    eprintln!(">>> Cause : {}", e);
-                    eprintln!(">>> Payload corrompu : {:?}", std::str::from_utf8(&msg.payload).unwrap_or("BINARY/NON-UTF8"));
+                    let err_msg = format!("JSON Parsing Failed: {}", e);
+                    let corr_id = Uuid::new_v4();
+                    dispatcher_lobe.process_envelope(
+                        corr_id,
+                        "system",
+                        EventPayload::FatalSystemError(err_msg)
+                    ).await;
                 }
             }
         }
     });
 
-    // Fini le suicide silencieux, place à la haute résilience
-    if let Err(e) = tokio::try_join!(user_task, fragment_task) {
-        eprintln!("[Cortex] 💀 PANIQUE CRITIQUE: Un thread interne s'est effondré: {:?}", e);
-        std::process::exit(1); // Émission du signal de redémarrage (OS level)
-    }
-
+    // 7. Graceful Shutdown
+    tokio::signal::ctrl_c().await?;
+    info!("🛑 SIGINT/CTRL+C received. Commencing graceful shutdown of Cortex...");
+    
+    info!("Draining pipelines...");
+    let _ = nats_client.flush().await; // Attendre que NATS écoule les queues
+    
+    dispatcher_handle.abort(); // Tuer l'acteur
+    info!("📴 Cortex Hub safely powered down.");
+    
     Ok(())
 }
