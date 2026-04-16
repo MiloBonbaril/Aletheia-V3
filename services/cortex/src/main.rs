@@ -12,6 +12,8 @@ use uuid::Uuid;
 #[derive(Serialize)]
 struct PromptPayload {
     prompt: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -25,6 +27,8 @@ struct FragmentPayload<'a> {
 #[derive(Deserialize, Debug)]
 struct UserMsgPayload {
     text: String,
+    #[serde(default)]
+    images: Vec<String>,
 }
 
 // --- Internal Architectural Contracts (The Blueprint) ---
@@ -39,7 +43,7 @@ pub struct EventEnvelope {
 
 #[derive(Debug, Clone)]
 pub enum EventPayload {
-    PromptInbound(String),
+    PromptInbound { text: String, images: Vec<String> },
     LobeFragment { sequence: usize, text: String, is_last: bool },
     FatalSystemError(String),
 }
@@ -109,8 +113,8 @@ async fn run_dispatcher_worker(
         let _guard = span.enter();
 
         match event.payload {
-            EventPayload::PromptInbound(text) => {
-                info!("📥 Routing inbound prompt (length: {})", text.len());
+            EventPayload::PromptInbound { text, images } => {
+                info!("📥 Routing inbound prompt (length: {}, images: {})", text.len(), images.len());
                 
                 // Track session start
                 active_sessions.insert(event.session_id.clone(), SessionContext {
@@ -118,7 +122,7 @@ async fn run_dispatcher_worker(
                     total_fragments: 0,
                 });
 
-                let prompt_msg = PromptPayload { prompt: text };
+                let prompt_msg = PromptPayload { prompt: text, images };
                 
                 if let Ok(payload_bytes) = serde_json::to_vec(&prompt_msg) {
                     if let Err(e) = nats.publish("cortex.prompt", payload_bytes.into()).await {
@@ -188,10 +192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _io_handle = tokio::spawn(async move {
         info!("👂 Cortex Ingress Listening on 'io.user.msg.text'...");
         while let Some(msg) = user_msg_subscriber.next().await {
-            let prompt_text = if let Ok(payload) = serde_json::from_slice::<UserMsgPayload>(&msg.payload) {
-                payload.text
+            let (prompt_text, images) = if let Ok(payload) = serde_json::from_slice::<UserMsgPayload>(&msg.payload) {
+                (payload.text, payload.images)
             } else if let Ok(text_slice) = std::str::from_utf8(&msg.payload) {
-                text_slice.to_string()
+                (text_slice.to_string(), vec![])
             } else {
                 warn!("⚠️ Ingression Error: Unsupported message format.");
                 continue;
@@ -203,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             dispatcher_io.process_envelope(
                 corr_id,
                 &session_id,
-                EventPayload::PromptInbound(prompt_text)
+                EventPayload::PromptInbound { text: prompt_text, images }
             ).await;
         }
     });

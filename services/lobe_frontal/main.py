@@ -181,8 +181,9 @@ async def main():
         subject = msg.subject
         data = json.loads(msg.data.decode())
         prompt = data.get("prompt", "")
+        images = data.get("images", [])
         
-        logger.info(f"Requête reçue sur '{subject}': {prompt}")
+        logger.info(f"Requête reçue sur '{subject}': {prompt} (avec {len(images)} images)")
         logger.debug(f"Données brutes reçues : {data}")
         
         logger.info("Récupération du contexte via Hippocampe...")
@@ -204,13 +205,29 @@ async def main():
         except Exception as e:
             logger.error(f"Erreur lors de la récupération du contexte: {e}")
             
-        messages.append({"role": "user", "content": prompt})
-        
-        try:
-            logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
-            await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": prompt}).encode())
-        except Exception as e:
-            logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
+        if images:
+            user_content = []
+            if prompt:
+                user_content.append({"type": "text", "text": prompt})
+            for img_url in images:
+                user_content.append({"type": "image_url", "image_url": {"url": img_url}})
+            messages.append({"role": "user", "content": user_content})
+
+            try:
+                logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
+                await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": user_content}).encode())
+            except Exception as e:
+                logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
+
+        else:
+            messages.append({"role": "user", "content": prompt})
+
+            try:
+                logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
+                await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": prompt}).encode())
+            except Exception as e:
+                logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
+
 
         logger.info("En attente d'un slot LLM...")
         async with INFERENCE_SEMAPHORE:
@@ -373,4 +390,7 @@ async def main():
         await nc.drain()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Arrêt du Lobe Frontal...")

@@ -78,14 +78,25 @@ class Text(commands.Cog):
         if message.author.bot or message.author == self.bot.user:
             return
 
-        if not message.content: # and not message.stickers:
+        if not message.content and not message.attachments:
             return
-            
+
         self.active_channel = message.channel
 
         if self.nc:
             formatted_msg = f"{message.author.display_name} said: {message.content}"
             payload = {"text": formatted_msg}
+            
+            images = []
+            for att in message.attachments:
+                if att.content_type and att.content_type.startswith("image/"):
+                    images.append(att.url)
+                    if len(images) == 5:
+                        break
+                        
+            if images:
+                payload["images"] = images
+
             try:
                 await self.nc.publish("io.user.msg.text", json.dumps(payload).encode())
             except Exception as e:

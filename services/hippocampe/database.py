@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.future import select
 from datetime import datetime
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,10 +32,15 @@ async def init_db():
         # Création rétroactive absolue de l'index B-Tree pour les données préexistantes 
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_messages_timestamp ON messages (timestamp DESC);"))
 
-async def add_message(role: str, content: str):
+async def add_message(role: str, content):
+    if not isinstance(content, str):
+        content_str = json.dumps(content)
+    else:
+        content_str = content
+
     async with AsyncSessionLocal() as db:
         try:
-            new_msg = Message(role=role, content=content)
+            new_msg = Message(role=role, content=content_str)
             db.add(new_msg)
             await db.commit() # Relaxe le GIL pendant l'attente I/O réseau
         except Exception as e:
@@ -46,7 +52,16 @@ async def get_recent_history(n: int = 10):
         try:
             stmt = select(Message.role, Message.content).order_by(Message.timestamp.desc()).limit(n)
             result = await db.execute(stmt)
-            messages_list = [{"role": row.role, "content": row.content} for row in result.all()]
+            
+            def parse_content(c):
+                try:
+                    if isinstance(c, str) and (c.startswith('[') or c.startswith('{')):
+                        return json.loads(c)
+                except json.JSONDecodeError:
+                    pass
+                return c
+
+            messages_list = [{"role": row.role, "content": parse_content(row.content)} for row in result.all()]
             messages_list.reverse() # In-place reversal, 0 overhead GC
             return messages_list
         except Exception as e:
