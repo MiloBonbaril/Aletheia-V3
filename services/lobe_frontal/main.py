@@ -1,9 +1,10 @@
-import asyncio
-import json
 import os
 import re
+import json
 import nats
+import asyncio
 import logging
+from datetime import datetime
 
 # Configuration du logging
 logging.basicConfig(
@@ -205,22 +206,27 @@ async def main():
         except Exception as e:
             logger.error(f"Erreur lors de la récupération du contexte: {e}")
             
+        timestamp_prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
         if images:
-            user_content = []
+            user_msg_for_llm = []
+            user_msg_for_db = []
             if prompt:
-                user_content.append({"type": "text", "text": prompt})
+                user_msg_for_llm.append({"type": "text", "text": timestamp_prefix + prompt})
+                user_msg_for_db.append({"type": "text", "text": prompt})
             for img_url in images:
-                user_content.append({"type": "image_url", "image_url": {"url": img_url}})
-            messages.append({"role": "user", "content": user_content})
+                img_obj = {"type": "image_url", "image_url": {"url": img_url}}
+                user_msg_for_llm.append(img_obj)
+                user_msg_for_db.append(img_obj)
+            messages.append({"role": "user", "content": user_msg_for_llm})
 
             try:
                 logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
-                await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": user_content}).encode())
+                await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": user_msg_for_db}).encode())
             except Exception as e:
                 logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
 
         else:
-            messages.append({"role": "user", "content": prompt})
+            messages.append({"role": "user", "content": timestamp_prefix + prompt})
 
             try:
                 logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")

@@ -22,7 +22,7 @@ class GroqInterface:
             stream=True,
             temperature=temperature,
             top_p=top_p,
-            reasoning_effort=reasoning_effort,
+            #reasoning_effort=reasoning_effort,
             #seed=42,
             #logprobs=True,
             #top_logprobs=TOP_K

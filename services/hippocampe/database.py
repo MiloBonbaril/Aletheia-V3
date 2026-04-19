@@ -50,18 +50,31 @@ async def add_message(role: str, content):
 async def get_recent_history(n: int = 10):
     async with AsyncSessionLocal() as db:
         try:
-            stmt = select(Message.role, Message.content).order_by(Message.timestamp.desc()).limit(n)
+            stmt = select(Message.role, Message.content, Message.timestamp).order_by(Message.timestamp.desc()).limit(n)
             result = await db.execute(stmt)
             
-            def parse_content(c):
+            def parse_content(role, c, timestamp):
+                # Seul l'utilisateur a l'horodatage pour éviter que l'IA n'apprenne à l'écrire
+                prefix = f"[{timestamp.strftime('%Y-%m-%d %H:%M:%S')}] " if role == "user" else ""
                 try:
                     if isinstance(c, str) and (c.startswith('[') or c.startswith('{')):
-                        return json.loads(c)
+                        j = json.loads(c)
+                        if isinstance(j, dict) and "text" in j:
+                            j["text"] = prefix + j["text"] if prefix else j["text"]
+                            return j
+                        elif isinstance(j, list):
+                            if prefix and len(j) > 0 and isinstance(j[0], dict) and j[0].get("type") == "text":
+                                j[0]["text"] = prefix + j[0]["text"]
+                            return j
+                        else:
+                            return j
+
                 except json.JSONDecodeError:
                     pass
-                return c
 
-            messages_list = [{"role": row.role, "content": parse_content(row.content)} for row in result.all()]
+                return prefix + c if prefix else c
+
+            messages_list = [{"role": row.role, "content": parse_content(row.role, row.content, row.timestamp)} for row in result.all()]
             messages_list.reverse() # In-place reversal, 0 overhead GC
             return messages_list
         except Exception as e:

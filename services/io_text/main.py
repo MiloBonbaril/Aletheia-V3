@@ -60,7 +60,7 @@ async def main():
             
             if line_str in [":w", ":send"]:
                 if current_message:
-                    text_to_send = "".join(current_message).strip()
+                    text_to_send = "Milo: " + "".join(current_message).strip()
                     payload = {"text": text_to_send}
                     
                     try:
