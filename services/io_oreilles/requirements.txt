@@ -1,0 +1,8 @@
+nats-py
+asyncio
+sounddevice
+numpy
+whisper-cpp-python
+silero-vad
+onnxruntime
+torch
