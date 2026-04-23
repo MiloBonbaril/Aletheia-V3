@@ -3,6 +3,6 @@
 Le système de transcription audio en temps réel.
 
 ### Rôle principal :
-- Écouter en permanence le microphone de l'utilisateur (via `Whisper.cpp`).
-- Transcrire la voix en texte.
-- Publier des événements `USER_SPOKE` sur le réseau NATS dès qu'une phrase est complétée.
+- Écouter en permanence le microphone de l'utilisateur.
+- Transcrire la voix en texte via Ctranslate2-rs et Whisper.
+- Publier des événements `user.msg.speak` sur le réseau NATS dès qu'une phrase est complétée.
