@@ -291,7 +291,7 @@ async fn main() -> Result<()> {
         // Parce qu'au-delà de 4 threads sur de l'audio temps réel, le coût de 
         // synchronisation entre les cœurs (Context Switching) devient plus lourd 
         // que le calcul lui-même. 4 cœurs vont pulvériser l'inférence.
-        num_threads_per_replica: 4, 
+        num_threads_per_replica: 16, 
         
         // 4. Parallélisme Tensoriel
         // On met 'false'. C'est une technologie de data-center pour couper 
@@ -311,7 +311,7 @@ async fn main() -> Result<()> {
         // décider sur quels cœurs physiques envoyer le travail. C'est plus sûr sur un PC portable.
         cpu_core_offset: -1,
     };
-    let whisper = ct2rs::Whisper::new("model/whisper-small-int8-ct2", whisper_config).unwrap();
+    let whisper = ct2rs::Whisper::new("model/whisper-small-ct2", whisper_config).unwrap();
     let whisper_options = ct2rs::WhisperOptions::default();
     let stt_language: Option<String> = std::env::var("STT_LANGUAGE").ok();
     
