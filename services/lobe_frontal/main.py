@@ -18,6 +18,7 @@ from nats.errors import ConnectionClosedError, TimeoutError, NoServersError
 from dotenv import load_dotenv
 from Groq.interface import GroqInterface
 from OpenAI.interface import OpenAIInterface
+from src.prompt_builder import PromptBuilder
 
 load_dotenv()
 
@@ -25,7 +26,7 @@ nc = None
 PUNCTUATION_PATTERN = re.compile(r'([.!?\n]+)')
 INFERENCE_SEMAPHORE = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_INFERENCE", "1")))
 
-# Configuration
+# Configuration LLM
 INTERFACE_NAME = os.getenv("INTERFACE", "groq")
 if INTERFACE_NAME == "groq":
     groq_api_key = os.getenv("GROQ_API_KEY")
@@ -45,55 +46,8 @@ TOP_P=float(os.getenv("TOP_P", 0.95))
 TOP_K=int(os.getenv("TOP_K", 20))
 MIN_P=os.getenv("MIN_P", 0)
 
-# Tool declarations
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_from_memory",
-            "description": "Call this tool to get relevant information to a prompt or a word from RAG memory. Please call this tool before answering something. It is advised to use this tool often, even before every response.",
-            "parameters": {
-            "type": "object",
-            "properties": {
-                "prompt": {
-                "type": "string",
-                "description": "The prompt or word to search related information from your RAG memory"
-                }
-            },
-            "required": ["prompt"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_to_memory",
-            "description": "Call this tool to save text to RAG memory. Please be absolutely sure to use get_from_memory before to avoid duplicates.",
-            "parameters": {
-            "type": "object",
-            "properties": {
-                "text": {
-                "type": "string",
-                "description": "The text to save inside your RAG memory"
-                }
-            },
-            "required": ["text"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stay_silent",
-            "description": "Call this tool IMMEDIATELY if you decide you do not want to respond to the user, if you are ignoring them, or if you were explicitly told to be quiet. Do not output any text if you call this.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    }
-]
+# Initialisation du PromptBuilder (lecture des fichiers config une seule fois)
+prompt_builder = PromptBuilder()
 
 
 async def save_to_memory(text: str):
@@ -177,7 +131,7 @@ async def main():
 
     logger.info("✅ Lobe Frontal connecté au système nerveux (NATS).")
 
-    # 2. Handler pour les prompts
+    # Handler pour les prompts
     async def prompt_handler(msg):
         subject = msg.subject
         data = json.loads(msg.data.decode())
@@ -187,54 +141,68 @@ async def main():
         logger.info(f"Requête reçue sur '{subject}': {prompt} (avec {len(images)} images)")
         logger.debug(f"Données brutes reçues : {data}")
         
+        # ── Récupération parallèle depuis l'hippocampe ──
+        history = []
+        context_summary = None
+
+        async def fetch_history():
+            nonlocal history
+            try:
+                response = await nc.request(
+                    "hippocampe.history.get",
+                    json.dumps({"n": 20}).encode(),
+                    timeout=5.0
+                )
+                history = json.loads(response.data.decode()).get("history", [])
+                logger.info(f"Historique récupéré: {len(history)} messages")
+            except TimeoutError:
+                logger.error("Timeout lors de la récupération de l'historique.")
+            except Exception as e:
+                logger.error(f"Erreur lors de la récupération de l'historique: {e}")
+
+        async def fetch_context_summary():
+            """Stub: récupère le résumé des 10 dernières minutes (à implémenter)."""
+            nonlocal context_summary
+            try:
+                response = await nc.request(
+                    "hippocampe.context.summary",
+                    b"",
+                    timeout=5.0
+                )
+                result = json.loads(response.data.decode())
+                summary = result.get("summary", "")
+                if summary:
+                    context_summary = summary
+                    logger.info("Résumé contextuel récupéré.")
+            except TimeoutError:
+                logger.debug("Pas de résumé contextuel disponible (timeout).")
+            except Exception as e:
+                logger.debug(f"Résumé contextuel non disponible: {e}")
+
+        # Exécution parallèle des deux requêtes
         logger.info("Récupération du contexte via Hippocampe...")
-        messages = []
+        await asyncio.gather(fetch_history(), fetch_context_summary())
+
+        # ── Construction du prompt via PromptBuilder ──
+        messages = prompt_builder.build(
+            prompt=prompt,
+            images=images,
+            history=history,
+            context_summary=context_summary,
+        )
+
+        # ── Sauvegarde du message utilisateur dans l'historique ──
+        user_content_for_db = prompt_builder.build_user_content_for_db(prompt, images)
         try:
-            response = await nc.request("hippocampe.context.get", b"", timeout=5.0)
-            context = json.loads(response.data.decode())
-            system_prompt = context.get("system_prompt", "")
-            history = context.get("history", [])
-            
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            
-            for msg_entry in history:
-                messages.append({"role": msg_entry["role"], "content": msg_entry["content"]})
-                
-        except TimeoutError:
-            logger.error("Timeout lors de la récupération du contexte.")
+            logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
+            await nc.publish(
+                "hippocampe.history.add",
+                json.dumps({"role": "user", "content": user_content_for_db}).encode()
+            )
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération du contexte: {e}")
-            
-        timestamp_prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-        if images:
-            user_msg_for_llm = []
-            user_msg_for_db = []
-            if prompt:
-                user_msg_for_llm.append({"type": "text", "text": timestamp_prefix + prompt})
-                user_msg_for_db.append({"type": "text", "text": prompt})
-            for img_url in images:
-                img_obj = {"type": "image_url", "image_url": {"url": img_url}}
-                user_msg_for_llm.append(img_obj)
-                user_msg_for_db.append(img_obj)
-            messages.append({"role": "user", "content": user_msg_for_llm})
+            logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
 
-            try:
-                logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
-                await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": user_msg_for_db}).encode())
-            except Exception as e:
-                logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
-
-        else:
-            messages.append({"role": "user", "content": timestamp_prefix + prompt})
-
-            try:
-                logger.debug(f"Enregistrement du prompt utilisateur dans l'historique : {prompt}")
-                await nc.publish("hippocampe.history.add", json.dumps({"role": "user", "content": prompt}).encode())
-            except Exception as e:
-                logger.error(f"Erreur lors de l'enregistrement de l'historique utilisateur: {e}")
-
-
+        # ── Inférence LLM ──
         logger.info("En attente d'un slot LLM...")
         async with INFERENCE_SEMAPHORE:
 
@@ -251,7 +219,10 @@ async def main():
                 logger.debug("--- FIN DES MESSAGES ENVOYÉS AU LLM ---")
 
                 try:
-                    stream = await interface.get_stream(messages, MODEL, tools, TEMPERATURE, TOP_P, REASONING_EFFORT)
+                    stream = await interface.get_stream(
+                        messages, MODEL, prompt_builder.tools_schema,
+                        TEMPERATURE, TOP_P, REASONING_EFFORT
+                    )
 
                     fragments_buffer = []
 
@@ -382,7 +353,7 @@ async def main():
 
             logger.info("Fin de la génération (slot libéré).")
 
-    # 4. Souscription aux requêtes du cortex
+    # Souscription aux requêtes du cortex
     await nc.subscribe("cortex.prompt", queue="lobe_workers", cb=prompt_handler)
     logger.info("👂 Lobe Frontal en écoute sur 'cortex.prompt' (queue: lobe_workers)...")
 

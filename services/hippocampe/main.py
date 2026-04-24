@@ -18,6 +18,7 @@ async def try_init_db():
             print(f"La base de données n'est pas encore prête... ({i+1}/{max_retries})")
             await asyncio.sleep(2)
     print("Échec de connexion à la base de données après plusieurs tentatives.")
+
 async def main():
     await try_init_db()
 
@@ -30,40 +31,19 @@ async def main():
 
     print("✅ Hippocampe connecté au système nerveux (NATS).")
 
-    def read_context_files():
-        memory_content = "Il n'y a pas de mémoire importante définie."
-        user_content = "Aucune information utilisateur n'est définie."
-        
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        try:
-            with open(os.path.join(script_dir, "PERSONA.md"), "r") as f:
-                persona_content = f.read()
-        except FileNotFoundError:
-            pass
+    # ── Historique ──
 
+    async def get_history_handler(msg):
+        """Retourne les N derniers messages de l'historique."""
         try:
-            with open(os.path.join(script_dir, "MEMORY.md"), "r") as f:
-                memory_content = f.read()
-        except FileNotFoundError:
-            pass
+            data = json.loads(msg.data.decode())
+            n = data.get("n", 20)
+        except (json.JSONDecodeError, Exception):
+            n = 20
 
-        try:
-            with open(os.path.join(script_dir, "USER.md"), "r") as f:
-                user_content = f.read()
-        except FileNotFoundError:
-            pass
-            
-        return f"{persona_content}\n\nMémoire importante:\n{memory_content}\n\nInformations sur ton humain (ton utilisateur):\n{user_content}\n"
-        
-    async def get_context_handler(msg):
-        print("[Hippocampe] Requête de contexte reçue.")
-        system_prompt = read_context_files()
-        history = await get_recent_history(20)
-        
-        response = {
-            "system_prompt": system_prompt,
-            "history": history
-        }
+        print(f"[Hippocampe] Requête historique reçue (n={n})")
+        history = await get_recent_history(n)
+        response = {"history": history}
         await nc.publish(msg.reply, json.dumps(response).encode())
 
     async def add_history_handler(msg):
@@ -73,6 +53,20 @@ async def main():
         print(f"[Hippocampe] Ajout historique ({role})")
         if role and content:
             await add_message(role, content)
+
+    # ── Résumé contextuel (stub) ──
+
+    async def context_summary_handler(msg):
+        """
+        Stub: retourne un résumé des 10 dernières minutes.
+        À implémenter plus tard avec un vrai résumé LLM.
+        Pour l'instant retourne un résumé vide.
+        """
+        print("[Hippocampe] Requête de résumé contextuel reçue (stub).")
+        response = {"summary": ""}
+        await nc.publish(msg.reply, json.dumps(response).encode())
+
+    # ── RAG ──
 
     async def rag_query_handler(msg):
         data = json.loads(msg.data.decode())
@@ -90,12 +84,20 @@ async def main():
         response = {"result": result}
         await nc.publish(msg.reply, json.dumps(response).encode())
 
-    await nc.subscribe("hippocampe.context.get", cb=get_context_handler)
+    # ── Souscriptions NATS ──
+
+    await nc.subscribe("hippocampe.history.get", cb=get_history_handler)
     await nc.subscribe("hippocampe.history.add", cb=add_history_handler)
+    await nc.subscribe("hippocampe.context.summary", cb=context_summary_handler)
     await nc.subscribe("hippocampe.rag.query", cb=rag_query_handler)
     await nc.subscribe("hippocampe.rag.add", cb=rag_add_handler)
     
     print("👂 Hippocampe en écoute...")
+    print("   - hippocampe.history.get     (récupération historique)")
+    print("   - hippocampe.history.add     (ajout historique)")
+    print("   - hippocampe.context.summary (résumé 10 min — stub)")
+    print("   - hippocampe.rag.query       (recherche RAG)")
+    print("   - hippocampe.rag.add         (ajout RAG)")
 
     try:
         while True:
