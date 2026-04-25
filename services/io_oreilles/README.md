@@ -1,8 +1,29 @@
-# I/O Oreilles (STT)
+# 👂 I/O Oreilles (STT)
 
-Le système de transcription audio en temps réel.
+Ce service assure la perception auditive de Nexus-V en transformant le flux audio en texte en temps réel.
 
-### Rôle principal :
-- Écouter en permanence le microphone de l'utilisateur.
-- Transcrire la voix en texte via Ctranslate2-rs et Whisper.
-- Publier des événements `user.msg.speak` sur le réseau NATS dès qu'une phrase est complétée.
+## 🎯 Rôle & Responsabilités
+
+- **Capture Audio** : Écoute continue du microphone physique.
+- **Détection d'Activité Vocale (VAD)** : Utilise **Silero VAD** pour identifier les segments de parole et ignorer le bruit de fond.
+- **Transcription (STT)** : Transforme la parole en texte via **CTranslate2** et le modèle **Whisper**.
+- **Émission d'Événements** : Publie le texte transcrit sur le topic NATS `io.user.speak` dès qu'une phrase complète est détectée.
+
+## ⚙️ Configuration & Lancement
+
+### Dépendances
+- `libonnxruntime.so` (pour Silero VAD).
+- Modèles Whisper convertis pour CTranslate2.
+
+### Variables d'Environnement
+- `STT_LANGUAGE` : Langue de transcription (ex: `fr`).
+- `NATS_URL` : URL du broker NATS.
+
+### Lancement
+```bash
+# Selon l'implémentation (Rust/Python)
+cargo run --release
+```
+
+## 🔌 Interface NATS
+- **Publie sur** : `io.user.speak`
