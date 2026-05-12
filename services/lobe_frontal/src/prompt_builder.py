@@ -235,6 +235,33 @@ class PromptBuilder:
         return "\n".join(sections)
 
     # ──────────────────────────────────────────────
+    #  Validation URLs
+    # ──────────────────────────────────────────────
+
+    @staticmethod
+    def _is_discord_url_expired(url: str) -> bool:
+        """Vérifie si une URL Discord CDN est expirée via son token 'ex'."""
+        if not isinstance(url, str) or "cdn.discordapp.com/attachments/" not in url:
+            return False
+            
+        import urllib.parse
+        import time
+        
+        try:
+            parsed = urllib.parse.urlparse(url)
+            query = urllib.parse.parse_qs(parsed.query)
+            ex_hex = query.get('ex', [''])[0]
+            if ex_hex:
+                ex_timestamp = int(ex_hex, 16)
+                # Marge de 5 minutes (300s) par sécurité
+                if ex_timestamp < time.time() + 300:
+                    return True
+        except Exception:
+            pass
+            
+        return False
+
+    # ──────────────────────────────────────────────
     #  Construction du prompt complet
     # ──────────────────────────────────────────────
 
@@ -262,6 +289,7 @@ class PromptBuilder:
             2. Historique conversationnel (messages natifs)
             3. Message utilisateur courant (avec timestamp)
         """
+        import copy
         messages = []
 
         # 1. System prompt XML
@@ -270,7 +298,45 @@ class PromptBuilder:
 
         # 2. Historique conversationnel (déjà au format natif role/content)
         if history:
-            messages.extend(history)
+            history_copy = copy.deepcopy(history)
+            repaired_history = []
+            
+            for msg in history_copy:
+                # 1. Nettoyage des images Discord expirées
+                if isinstance(msg.get("content"), list):
+                    cleaned_content = []
+                    for item in msg["content"]:
+                        if item.get("type") == "image_url":
+                            url = item.get("image_url", {}).get("url", "")
+                            if self._is_discord_url_expired(url):
+                                logger.info("Image Discord expirée retirée de l'historique.")
+                                cleaned_content.append({
+                                    "type": "text",
+                                    "text": "[Image jointe expirée et inaccessible]"
+                                })
+                                continue
+                        cleaned_content.append(item)
+                    msg["content"] = cleaned_content
+                
+                # 2. Réparation des rôles 'tool' orphelins (pour compatibilité stricte Mistral/OpenAI)
+                if msg.get("role") == "tool":
+                    tool_content = msg.get("content", "")
+                    injection = f"\n\n[Information récupérée en mémoire (tool call) : {tool_content}]"
+                    
+                    if repaired_history:
+                        prev_msg = repaired_history[-1]
+                        if isinstance(prev_msg.get("content"), list):
+                            prev_msg["content"].append({"type": "text", "text": injection})
+                        else:
+                            prev_msg["content"] = str(prev_msg.get("content") or "") + injection
+                    else:
+                        msg["role"] = "user"
+                        msg["content"] = injection.strip()
+                        repaired_history.append(msg)
+                else:
+                    repaired_history.append(msg)
+                    
+            messages.extend(repaired_history)
 
         # 3. Message utilisateur courant
         timestamp_prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
@@ -284,10 +350,17 @@ class PromptBuilder:
                     "text": timestamp_prefix + prompt
                 })
             for img_url in images:
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": img_url}
-                })
+                if self._is_discord_url_expired(img_url):
+                    logger.info("Image Discord du prompt courant expirée, ignorée.")
+                    user_content.append({
+                        "type": "text",
+                        "text": "[Image jointe expirée et inaccessible]"
+                    })
+                else:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": img_url}
+                    })
             messages.append({"role": "user", "content": user_content})
         else:
             # Format texte simple
@@ -296,7 +369,33 @@ class PromptBuilder:
                 "content": timestamp_prefix + prompt
             })
 
-        return messages
+        # 4. Compacter les messages consécutifs du même rôle (ex: user -> user)
+        # Requis pour Mistral qui exige une alternance stricte
+        compacted_messages = []
+        for msg in messages:
+            if compacted_messages and compacted_messages[-1]["role"] == msg["role"] and msg["role"] in ("user", "assistant"):
+                prev_msg = compacted_messages[-1]
+                
+                # On convertit le contenu précédent en liste (format multimodale) s'il ne l'est pas
+                if not isinstance(prev_msg["content"], list):
+                    prev_msg["content"] = [{"type": "text", "text": prev_msg.get("content") or ""}]
+                
+                # On convertit le nouveau contenu en liste
+                if isinstance(msg.get("content"), list):
+                    msg_content_list = msg["content"]
+                else:
+                    msg_content_list = [{"type": "text", "text": msg.get("content") or ""}]
+                
+                # On fusionne les deux contenus
+                prev_msg["content"].extend(msg_content_list)
+            else:
+                compacted_messages.append(msg)
+
+        # 5. Mistral exige strictement que le premier message après 'system' soit 'user'
+        if len(compacted_messages) > 1 and compacted_messages[1]["role"] == "assistant":
+            compacted_messages.pop(1)
+
+        return compacted_messages
 
     def build_user_content_for_db(
         self,

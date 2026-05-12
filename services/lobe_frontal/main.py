@@ -18,6 +18,7 @@ from nats.errors import ConnectionClosedError, TimeoutError, NoServersError
 from dotenv import load_dotenv
 from Groq.interface import GroqInterface
 from OpenAI.interface import OpenAIInterface
+from Mistral.interface import MistralInterface
 from src.prompt_builder import PromptBuilder
 
 load_dotenv()
@@ -35,6 +36,8 @@ if INTERFACE_NAME == "groq":
     interface = GroqInterface(groq_api_key)
 elif INTERFACE_NAME == "openai" or INTERFACE_NAME == "llama":
     interface = OpenAIInterface()
+elif INTERFACE_NAME == "mistral":
+    interface = MistralInterface(os.getenv("MISTRAL_API_KEY"))
 else:
     logger.error(f"Interface '{INTERFACE_NAME}' non reconnue.")
     raise ValueError(f"Interface '{INTERFACE_NAME}' non reconnue.")

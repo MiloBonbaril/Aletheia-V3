@@ -3,3 +3,4 @@ asyncio
 groq
 python-dotenv
 openai
+mistralai
