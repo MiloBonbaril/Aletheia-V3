@@ -162,31 +162,30 @@ docker compose down
 
 ## Benchmarks
 
-### Matériel utilisé pour les benchmarks:
-PC portable qui fait tourner tout le projet:
-- DELL Inspiron 15 5515
-- processeur: AMD Ryzen 5 5500U
-- carte graphique: integrated AMD Radeon Graphics
-- RAM: 16go
-- SSD: 512 go
+### Hardware used for benchmarks:
+Laptop running the entire project:
+- Processor: AMD Ryzen 5 5500U
+- Graphics Card: integrated AMD Radeon Graphics
+- RAM: 16 GB
+- SSD: 512 GB
 - OS: Arch Linux
-- Wifi
+- Wi-Fi
 
-PC fixe qui fait tourner le LLM en local (Gemma 4 E2B) via llama.cpp:
-- processeur: AMD Ryzen 9 5950X
-- carte graphique: NVIDIA RTX 5070ti (16go)
-- RAM: 32go (DDR4)
-- SSD: 512 go
+Desktop PC running the local LLM (Gemma 4 E2B) via llama.cpp:
+- Processor: AMD Ryzen 9 5950X
+- Graphics Card: NVIDIA RTX 5070ti (16 GB)
+- RAM: 32 GB (DDR4)
+- SSD: 512 GB
 - OS: Windows 11
-- Wifi
+- Wi-Fi
 
-### Résultats des Benchmarks
+### Benchmark Results
 
-le service "benchmark" est présent dans le dossier `services/benchmark` et permet de benchmark Aletheia, de manière continue et automatique, afin de garantir le respect des exigences de performances.
+The `benchmark` service is located in the `services/benchmark` directory and is used to benchmark Aletheia continuously and automatically, ensuring performance requirements are met.
 
-#### V1.0 première implémentation du benchmark
+#### V1.0 First benchmark implementation
 
-Voici les résultats du benchmark E2E : 
+Here are the E2E benchmark results:
 ```
 🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
   ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
@@ -197,19 +196,19 @@ Voici les résultats du benchmark E2E :
   ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 11.71 s
 ```
 
-Donc on peut apercevoir que:
-1. le LLM reçoit le message en 8.6 ms, ce qui est impressionant
-2. le LLM commence a générer des tokens en 3.12 s, ce qui est beaucoup, il faut réduire cela
-3. le TTS fini sa première synthèse en 1.55 s soit un total de 4.68 s. après envoie du message de l'utilisateur.
-4. le LLM fini sa génération avant que le TTS ait fini de lire le premier fragment.
+Thus, we can observe that:
+1. The LLM receives the message in 8.6 ms, which is impressive.
+2. The LLM starts generating tokens in 3.12 s, which is quite high and needs to be reduced.
+3. The TTS finishes its first synthesis in 1.55 s, resulting in a total of 4.68 s after the user's message is sent.
+4. The LLM finishes its generation before the TTS finishes reading the first fragment.
 
-4.68 s de latence est long pour une conversation en temps réel, il faut réduire cela. Mais pour un premier test sur un tel PC, c'est plutot prometteur ! 
+A latency of 4.68 s is long for a real-time conversation; this needs to be reduced. However, for a first test on such hardware, it is quite promising!
 
-Le prochain objectif est de réduire la latence du LLM pour le TTFT à moins de 2 secondes, et de réduire le temps de synthèse TTS à moins de 1 seconde. Ce qui nous donnerait une latence totale de moins de 3 secondes.
+The next goal is to reduce the LLM latency for the TTFT to under 2 seconds, and reduce the TTS synthesis time to under 1 second. This would give us a total latency of less than 3 seconds.
 
-#### V1.1 optimisation du TTS
+#### V1.1 TTS Optimization
 
-Après la refonte du TTS et après que les modèles ont fait leur "warmup", on obtient les résultats suivants:
+After redesigning the TTS and allowing the models to warm up, we obtain the following results:
 ```
 🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
   ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
@@ -219,17 +218,17 @@ Après la refonte du TTS et après que les modèles ont fait leur "warmup", on o
   ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 1.03 s
   ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 10.40 s
 ```
-Le "time to firs audio" est réduit à 1 seconde ce qui est tout à fait correcte pour une conversation en temps réel.
+The "time to first audio" is reduced to 1 second, which is perfectly acceptable for a real-time conversation.
 
-Cependant il semblerait que le "time to first token" n'est pas stable comme montre ce résultat:
+However, the "time to first token" does not seem to be stable, as shown by this result:
 ```
 🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
   ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
   ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 1.8 ms
   ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 2.11 s
-  # pas de dernier fragment car le message était "OK" donc un seul token (ce qui devrait-être rapide)
+  # no last fragment because the message was "OK" (which means only one token, and should be fast)
   ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 2.40 s
   ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 2.96 s
 ```
 
-Ce dernier résultat montre tout de même que la latence du TTS à passer la barre des 290.4 ms ce qui est excellent, cependant, il y a un problème avec le LLM, qui est ni stable, ni suffisamment rapide.
+This final result still shows that the TTS latency dropped below 290.4 ms, which is excellent. However, there is an issue with the LLM, which is neither stable nor fast enough.
