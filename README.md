@@ -162,5 +162,66 @@ docker compose down
 
 ## Benchmarks
 
-Coming soon !
+### Matériel utilisé pour les benchmarks:
+PC portable qui fait tourner tout le projet:
+- DELL Inspiron 15 5515
+- processeur: AMD Ryzen 5 5500U
+- carte graphique: integrated AMD Radeon Graphics
+- RAM: 16go
+- SSD: 512 go
+- OS: Arch Linux
+- Wifi
 
+PC fixe qui fait tourner le LLM en local (Gemma 4 E2B) via llama.cpp:
+- processeur: AMD Ryzen 9 5950X
+- carte graphique: NVIDIA RTX 5070ti (16go)
+- RAM: 32go (DDR4)
+- SSD: 512 go
+- OS: Windows 11
+- Wifi
+
+le service "benchmark" est présent dans le dossier `services/benchmark` et permet de benchmark Aletheia, de manière continue et automatique, afin de garantir le respect des exigences de performances.
+Voici les résultats du benchmark E2E : 
+```text
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                             📊 REPORT DE BENCHMARK : End-to-End Latency Graph (E2E)                              │
+╰─────────────── ID Transaction: 531fab63-6bbe-418a-94f3-77a7e5e09907 | Début: 2026-05-29 21:27:09 ────────────────╯
+╭─────────────────────────┬────────────────────────────┬──────────────┬───────────────┬────────────────────────────╮
+│ Étape                   │ Topic NATS                 │ Temps Absolu │ Latence Étape │ Description / Détails      │
+├─────────────────────────┼────────────────────────────┼──────────────┼───────────────┼────────────────────────────┤
+│ Entrée Utilisateur      │ io.user.msg.text,          │         0 µs │          0 µs │ 📥 Msg: 'Milo: Salut       │
+│                         │ io.user.speak              │              │               │ Aletheia! Aujourd'hui on   │
+│                         │                            │              │               │ va te passer au benchmark, │
+│                         │                            │              │               │ on va pouvoir voir la      │
+│                         │                            │              │               │ moindre de tes             │
+│                         │                            │              │               │ performances.'             │
+│ Aiguillage Cortex       │ cortex.prompt              │       8.6 ms │        8.6 ms │ 🧠 Cortex a routé le       │
+│                         │                            │              │               │ message vers Lobe Frontal  │
+│ Premier Fragment (TTFT) │ lobe.fragment_stream       │       3.13 s │        3.12 s │ 💬 TTFT: 'Challenge        │
+│                         │                            │              │               │ accepté !'                 │
+│ Début Lecture Voix      │ io.voice.speak.start       │       4.68 s │        1.55 s │ 🔊 Kokoro synthétise et    │
+│                         │                            │              │               │ commence à jouer           │
+│ Dernier Fragment LLM    │ lobe.fragment_stream       │       3.30 s │   -1379812 µs │ ✅ LLM fin. Sequence: #4   │
+│ Fin Lecture Voix        │ io.voice.speak.end         │      11.71 s │        8.40 s │ 🔇 Lecture terminée        │
+╰─────────────────────────┴────────────────────────────┴──────────────┴───────────────┴────────────────────────────╯
+╭─────────────────────────────────────── ⌛ TIMELINE VISUELLE DE LA LATENCE ───────────────────────────────────────╮
+│                                                                                                                  │
+│ 📊 Répartition de la latence :                                                                                   │
+│ ██████████████████████████████████████████████████████████████████████████████████████                           │
+│                                                                                                                  │
+│  ■ Liaison Cortex: 8.6 ms   ■ Inférence LLM (TTFT): 3.12 s   ■ Synthèse TTS: 1.55 s   ■ Lecture Audio: 7.02 s    │
+│                                                                                                                  │
+│ ⏱  Latence End-to-End Totale: 11.71 s                                                                            │
+│                                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+Donc on peut apercevoir que:
+1. le LLM reçoit le message en 8.6 ms, ce qui est impressionant
+2. le LLM commence a générer des tokens en 3.12 s, ce qui est beaucoup, il faut réduire cela
+3. le TTS fini sa première synthèse en 1.55 s soit un total de 4.68 s. après envoie du message de l'utilisateur.
+4. le LLM fini sa génération avant que le TTS ait fini de lire le premier fragment.
+
+4.68 s de latence est long pour une conversation en temps réel, il faut réduire cela. Mais pour un premier test sur un tel PC, c'est plutot prometteur ! 
+
+Le prochain objectif est de réduire la latence du LLM pour le TTFT à moins de 2 secondes, et de réduire le temps de synthèse TTS à moins de 1 seconde. Ce qui nous donnerait une latence totale de moins de 3 secondes.

@@ -1,0 +1,64 @@
+{
+  "name": "End-to-End Latency Graph (E2E)",
+  "description": "Mesure du parcours complet du message utilisateur jusqu'à la voix d'Aletheia",
+  "ingress_points": [
+    {
+      "topic": "io.user.msg.text",
+      "service": "io_text / io_discord",
+      "description": "Message texte envoyé par l'utilisateur"
+    },
+    {
+      "topic": "io.user.speak",
+      "service": "io_oreilles",
+      "description": "Transcription vocale détectée de l'utilisateur"
+    }
+  ],
+  "steps": [
+    {
+      "id": "user_ingress",
+      "name": "Entrée Utilisateur",
+      "description": "Détection initiale du message utilisateur",
+      "topics": ["io.user.msg.text", "io.user.speak"],
+      "display_color": "cyan"
+    },
+    {
+      "id": "cortex_dispatch",
+      "name": "Aiguillage Cortex",
+      "description": "Routage du message par le Cortex vers le Lobe Frontal",
+      "topics": ["cortex.prompt"],
+      "display_color": "magenta"
+    },
+    {
+      "id": "lobe_first_fragment",
+      "name": "Premier Fragment (TTFT)",
+      "description": "Réception du premier token textuel du Lobe Frontal (Time-to-First-Token)",
+      "topics": ["lobe.fragment_stream"],
+      "filter": "payload.get('sequence') == 0",
+      "display_color": "yellow"
+    },
+    {
+      "id": "voice_playback_start",
+      "name": "Début Lecture Voix",
+      "description": "Début de la lecture audio par le service I/O Voix",
+      "topics": ["io.voice.speak.start"],
+      "filter": "payload.get('sequence') == 0",
+      "display_color": "green"
+    },
+    {
+      "id": "lobe_last_fragment",
+      "name": "Dernier Fragment LLM",
+      "description": "Fin de la génération de texte par le Lobe Frontal",
+      "topics": ["lobe.fragment_stream"],
+      "filter": "payload.get('is_last') is True",
+      "display_color": "blue"
+    },
+    {
+      "id": "voice_playback_end",
+      "name": "Fin Lecture Voix",
+      "description": "Fin de la lecture audio complète par I/O Voix",
+      "topics": ["io.voice.speak.end"],
+      "filter": "payload.get('is_last') is True",
+      "display_color": "white"
+    }
+  ]
+}

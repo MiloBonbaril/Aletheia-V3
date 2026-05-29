@@ -40,7 +40,7 @@ def ensure_models():
 # Queue pour stocker les morceaux audio (matrices numpy) en attente de lecture
 audio_queue = asyncio.Queue()
 
-async def audio_player_worker():
+async def audio_player_worker(nc=None):
     """
     Worker asynchrone qui lit la queue en continu et joue le son.
     Puisque sd.wait() bloque le thread, on doit scrupuleusement l'appeler 
@@ -52,16 +52,39 @@ async def audio_player_worker():
     loop = asyncio.get_running_loop()
     
     while True:
-        audio, sample_rate = await audio_queue.get()
-        if audio is None:
+        item = await audio_queue.get()
+        if item is None or item[0] is None:
             break
             
-        print("▶️ Lecture d'un fragment audio...")
+        audio, sample_rate, sequence, text, is_last = item
+        
+        # Publier l'événement de début de voix sur NATS
+        if nc:
+            try:
+                await nc.publish("io.voice.speak.start", json.dumps({
+                    "sequence": sequence,
+                    "text": text,
+                    "is_last": is_last
+                }).encode())
+            except Exception as e:
+                print(f"⚠️ Erreur lors de l'émission io.voice.speak.start : {e}")
+
+        print(f"▶️ Lecture du fragment audio #{sequence}: '{text}'...")
         # Lancer la lecture (ne bloque pas)
         sd.play(audio, sample_rate)
         # Attendre la fin de la lecture de ce morceau (bloquant pour le son, mais exécuté de manière à garder loop free)
         await loop.run_in_executor(None, sd.wait)
         
+        # Publier l'événement de fin de voix sur NATS
+        if nc:
+            try:
+                await nc.publish("io.voice.speak.end", json.dumps({
+                    "sequence": sequence,
+                    "is_last": is_last
+                }).encode())
+            except Exception as e:
+                print(f"⚠️ Erreur lors de l'émission io.voice.speak.end : {e}")
+
         audio_queue.task_done()
 
 # ================= Programme Principal =================
@@ -73,9 +96,6 @@ async def main():
     kokoro = await asyncio.to_thread(Kokoro, model_path, voices_path)
     print("✅ Modèle chargé !")
 
-    # Démarrage du worker
-    player_task = asyncio.create_task(audio_player_worker())
-
     print("🔌 Connexion au serveur NATS...")
     try:
         nc = await nats.connect("nats://localhost:4222")
@@ -84,12 +104,21 @@ async def main():
         return
     print("✅ Connecté au système nerveux (NATS).")
 
+    # Démarrage du worker
+    player_task = asyncio.create_task(audio_player_worker(nc))
+
     async def fragment_handler(msg):
         try:
             data = json.loads(msg.data.decode())
             text = data.get("text", "")
+            sequence = data.get("sequence", 0)
+            is_last = data.get("is_last", False)
             
             if not text.strip():
+                # Si c'est le dernier fragment mais qu'il est vide, on peut notifier le player
+                if is_last:
+                    # On envoie un fragment vide pour que le end event soit généré
+                    await audio_queue.put((np.zeros(100), 22050, sequence, "", is_last))
                 return
             
             # La génération TTS prend du temps et est CPU bound. 
@@ -108,7 +137,7 @@ async def main():
             if result:
                 samples, sample_rate = result
                 # Ajouter à la queue pour que le player l'enchaîne
-                await audio_queue.put((samples, sample_rate))
+                await audio_queue.put((samples, sample_rate, sequence, text, is_last))
                 
         except Exception as e:
             print(f"⚠️ Erreur dans le handler fragment: {e}")
@@ -122,7 +151,7 @@ async def main():
     except KeyboardInterrupt:
         print("\nArrêt du service I/O Voix...")
     finally:
-        await audio_queue.put((None, None)) # Stopper le worker
+        await audio_queue.put((None, None, None, None, None)) # Stopper le worker
         if not player_task.done():
             await player_task
         await nc.close()
