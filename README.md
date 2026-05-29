@@ -232,3 +232,30 @@ However, the "time to first token" does not seem to be stable, as shown by this 
 ```
 
 This final result still shows that the TTS latency dropped below 290.4 ms, which is excellent. However, there is an issue with the LLM, which is neither stable nor fast enough.
+
+
+### V1.2 LLM Optimization
+
+After redesigning the LLM part we obtained the following results:
+```
+🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
+  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
+  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 6.9 ms
+  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 832.6 ms
+  ▶ Dernier Fragment LLM (lobe.fragment_stream) | Latence absolue: 875.4 ms
+  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 3.11 s
+  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 10.36 s
+```
+and:
+```
+🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
+  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
+  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 1.4 ms
+  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 424.8 ms
+  # "sprint test" only generating "OK"
+  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 744.3 ms
+  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 1.31 s
+```
+
+This results shows great improvements, with the "time to first token" dropping to 424.8 ms, and "time to first audio" dropping to 744.3 ms, which is excellent for a real-time conversation.
+This also shows that the TTFT is much more stable now, the difference between the two results is mainly due to the fact that "sprint test" is a very short message that only generate "OK".

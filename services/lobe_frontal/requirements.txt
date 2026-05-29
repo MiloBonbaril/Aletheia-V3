@@ -4,3 +4,4 @@ groq
 python-dotenv
 openai
 mistralai
+httpx
