@@ -180,40 +180,21 @@ PC fixe qui fait tourner le LLM en local (Gemma 4 E2B) via llama.cpp:
 - OS: Windows 11
 - Wifi
 
+### Résultats des Benchmarks
+
 le service "benchmark" est présent dans le dossier `services/benchmark` et permet de benchmark Aletheia, de manière continue et automatique, afin de garantir le respect des exigences de performances.
+
+#### V1.0 première implémentation du benchmark
+
 Voici les résultats du benchmark E2E : 
-```text
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│                             📊 REPORT DE BENCHMARK : End-to-End Latency Graph (E2E)                              │
-╰─────────────── ID Transaction: 531fab63-6bbe-418a-94f3-77a7e5e09907 | Début: 2026-05-29 21:27:09 ────────────────╯
-╭─────────────────────────┬────────────────────────────┬──────────────┬───────────────┬────────────────────────────╮
-│ Étape                   │ Topic NATS                 │ Temps Absolu │ Latence Étape │ Description / Détails      │
-├─────────────────────────┼────────────────────────────┼──────────────┼───────────────┼────────────────────────────┤
-│ Entrée Utilisateur      │ io.user.msg.text,          │         0 µs │          0 µs │ 📥 Msg: 'Milo: Salut       │
-│                         │ io.user.speak              │              │               │ Aletheia! Aujourd'hui on   │
-│                         │                            │              │               │ va te passer au benchmark, │
-│                         │                            │              │               │ on va pouvoir voir la      │
-│                         │                            │              │               │ moindre de tes             │
-│                         │                            │              │               │ performances.'             │
-│ Aiguillage Cortex       │ cortex.prompt              │       8.6 ms │        8.6 ms │ 🧠 Cortex a routé le       │
-│                         │                            │              │               │ message vers Lobe Frontal  │
-│ Premier Fragment (TTFT) │ lobe.fragment_stream       │       3.13 s │        3.12 s │ 💬 TTFT: 'Challenge        │
-│                         │                            │              │               │ accepté !'                 │
-│ Début Lecture Voix      │ io.voice.speak.start       │       4.68 s │        1.55 s │ 🔊 Kokoro synthétise et    │
-│                         │                            │              │               │ commence à jouer           │
-│ Dernier Fragment LLM    │ lobe.fragment_stream       │       3.30 s │   -1379812 µs │ ✅ LLM fin. Sequence: #4   │
-│ Fin Lecture Voix        │ io.voice.speak.end         │      11.71 s │        8.40 s │ 🔇 Lecture terminée        │
-╰─────────────────────────┴────────────────────────────┴──────────────┴───────────────┴────────────────────────────╯
-╭─────────────────────────────────────── ⌛ TIMELINE VISUELLE DE LA LATENCE ───────────────────────────────────────╮
-│                                                                                                                  │
-│ 📊 Répartition de la latence :                                                                                   │
-│ ██████████████████████████████████████████████████████████████████████████████████████                           │
-│                                                                                                                  │
-│  ■ Liaison Cortex: 8.6 ms   ■ Inférence LLM (TTFT): 3.12 s   ■ Synthèse TTS: 1.55 s   ■ Lecture Audio: 7.02 s    │
-│                                                                                                                  │
-│ ⏱  Latence End-to-End Totale: 11.71 s                                                                            │
-│                                                                                                                  │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
+  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
+  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 8.6 ms
+  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 3.13 s
+  ▶ Dernier Fragment LLM (lobe.fragment_stream) | Latence absolue: 3.30 s
+  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 4.68 s
+  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 11.71 s
 ```
 
 Donc on peut apercevoir que:
@@ -225,3 +206,30 @@ Donc on peut apercevoir que:
 4.68 s de latence est long pour une conversation en temps réel, il faut réduire cela. Mais pour un premier test sur un tel PC, c'est plutot prometteur ! 
 
 Le prochain objectif est de réduire la latence du LLM pour le TTFT à moins de 2 secondes, et de réduire le temps de synthèse TTS à moins de 1 seconde. Ce qui nous donnerait une latence totale de moins de 3 secondes.
+
+#### V1.1 optimisation du TTS
+
+Après la refonte du TTS et après que les modèles ont fait leur "warmup", on obtient les résultats suivants:
+```
+🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
+  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
+  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 10.0 ms
+  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 505.5 ms
+  ▶ Dernier Fragment LLM (lobe.fragment_stream) | Latence absolue: 633.6 ms
+  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 1.03 s
+  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 10.40 s
+```
+Le "time to firs audio" est réduit à 1 seconde ce qui est tout à fait correcte pour une conversation en temps réel.
+
+Cependant il semblerait que le "time to first token" n'est pas stable comme montre ce résultat:
+```
+🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
+  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
+  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 1.8 ms
+  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 2.11 s
+  # pas de dernier fragment car le message était "OK" donc un seul token (ce qui devrait-être rapide)
+  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 2.40 s
+  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 2.96 s
+```
+
+Ce dernier résultat montre tout de même que la latence du TTS à passer la barre des 290.4 ms ce qui est excellent, cependant, il y a un problème avec le LLM, qui est ni stable, ni suffisamment rapide.

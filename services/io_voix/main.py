@@ -2,110 +2,133 @@ import asyncio
 import json
 import os
 import urllib.request
-import threading
+import queue
+from concurrent.futures import ThreadPoolExecutor
 import nats
 import numpy as np
 import sounddevice as sd
+import onnxruntime as ort
 from kokoro_onnx import Kokoro
 
 # ================= Configuration =================
-# Chemin de téléchargement des modèles
 MODELS_DIR = os.getenv("KOKORO_MODELS_DIR", os.path.join(os.path.dirname(__file__), "models"))
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
-# "ff_siwis" est une voix féminine française (French Female)
 VOICE_NAME = os.getenv("KOKORO_VOICE", "ff_siwis")
 SPEECH_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
-# =================================================
+SAMPLE_RATE = 22050  # Fréquence native de Kokoro
 
-def download_file(url, dest_path):
-    print(f"Téléchargement de {os.path.basename(dest_path)} (cela peut prendre du temps...)")
-    urllib.request.urlretrieve(url, dest_path)
-    print(f"✅ {os.path.basename(dest_path)} téléchargé.")
+# Isolation totale de l'inférence (1 seul thread Python pour piloter ONNX)
+inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="KokoroInference")
+audio_sync_queue = queue.Queue()
 
 def ensure_models():
     os.makedirs(MODELS_DIR, exist_ok=True)
     model_path = os.path.join(MODELS_DIR, "kokoro-v1.0.onnx")
     voices_path = os.path.join(MODELS_DIR, "voices-v1.0.bin")
-    
-    if not os.path.exists(model_path):
-        download_file(MODEL_URL, model_path)
-    if not os.path.exists(voices_path):
-        download_file(VOICES_URL, voices_path)
-        
+    if not os.path.exists(model_path): 
+        print("📥 Téléchargement du modèle ONNX...")
+        urllib.request.urlretrieve(MODEL_URL, model_path)
+    if not os.path.exists(voices_path): 
+        print("📥 Téléchargement des voix...")
+        urllib.request.urlretrieve(VOICES_URL, voices_path)
     return model_path, voices_path
 
-# ================= Worker Audio =================
-# Queue pour stocker les morceaux audio (matrices numpy) en attente de lecture
-audio_queue = asyncio.Queue()
-
-async def audio_player_worker(nc=None):
+# ================= Configuration ONNX Spécial Zen 2 =================
+def build_optimized_kokoro(model_path, voices_path):
     """
-    Worker asynchrone qui lit la queue en continu et joue le son.
-    Puisque sd.wait() bloque le thread, on doit scrupuleusement l'appeler 
-    dans un executor, ou bloquer ce worker spécifique.
-    Cependant sd.play() est non-bloquant et s'exécute en arrière plan. 
-    On peut faire une boucle qui attend la fin de sd.wait().
+    Configure ONNX Runtime spécifiquement pour l'architecture du Ryzen 5 5500U.
     """
-    print("🔊 Worker audio prêt.")
-    loop = asyncio.get_running_loop()
+    opts = ort.SessionOptions()
     
-    while True:
-        item = await audio_queue.get()
-        if item is None or item[0] is None:
-            break
+    # 6 cœurs physiques = 6 threads intra-op. On évite le SMT (12 threads) qui sature le cache L3.
+    opts.intra_op_num_threads = 6
+    opts.inter_op_num_threads = 1
+    
+    # Mode d'exécution séquentiel pour réduire l'overhead de scheduling interne
+    opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    
+    # Optimisations matérielles maximales (AVX2/FMA présents sur ton 5500U)
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    
+    # Stratégie d'allocation mémoire agressive
+    opts.add_session_config_entry("session.allocator.alloc_granularity", "1")
+    
+    # Initialisation de Kokoro avec notre session customisée
+    session = ort.InferenceSession(model_path, sess_options=opts, providers=["CPUExecutionProvider"])
+    return Kokoro.from_session(session, voices_path)
+
+# ================= Worker Audio Ultra-Basse Latence =================
+def native_audio_player_worker(loop, nc):
+    """
+    Maintient le flux ALSA/PulseAudio/PipeWire ouvert en permanence.
+    Zéro allocation dynamique au moment de jouer le son.
+    """
+    print("🔊 Flux audio matériel persistant [OK]")
+    
+    with sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32') as stream:
+        while True:
+            item = audio_sync_queue.get()
+            if item is None: 
+                break
+                
+            samples, sequence, text, is_last = item
             
-        audio, sample_rate, sequence, text, is_last = item
-        
-        # Publier l'événement de début de voix sur NATS
-        if nc:
-            try:
-                await nc.publish("io.voice.speak.start", json.dumps({
-                    "sequence": sequence,
-                    "text": text,
-                    "is_last": is_last
-                }).encode())
-            except Exception as e:
-                print(f"⚠️ Erreur lors de l'émission io.voice.speak.start : {e}")
+            if nc:
+                asyncio.run_coroutine_threadsafe(
+                    nc.publish("io.voice.speak.start", json.dumps({
+                        "sequence": sequence, "text": text, "is_last": is_last
+                    }).encode()), loop
+                )
 
-        print(f"▶️ Lecture du fragment audio #{sequence}: '{text}'...")
-        # Lancer la lecture (ne bloque pas)
-        sd.play(audio, sample_rate)
-        # Attendre la fin de la lecture de ce morceau (bloquant pour le son, mais exécuté de manière à garder loop free)
-        await loop.run_in_executor(None, sd.wait)
-        
-        # Publier l'événement de fin de voix sur NATS
-        if nc:
-            try:
-                await nc.publish("io.voice.speak.end", json.dumps({
-                    "sequence": sequence,
-                    "is_last": is_last
-                }).encode())
-            except Exception as e:
-                print(f"⚠️ Erreur lors de l'émission io.voice.speak.end : {e}")
-
-        audio_queue.task_done()
+            # Écriture directe et synchrone dans le buffer de la carte son
+            stream.write(samples.astype(np.float32).reshape(-1, 1))
+            
+            if nc:
+                asyncio.run_coroutine_threadsafe(
+                    nc.publish("io.voice.speak.end", json.dumps({
+                        "sequence": sequence, "is_last": is_last
+                    }).encode()), loop
+                )
+            audio_sync_queue.task_done()
 
 # ================= Programme Principal =================
 async def main():
-    print("⚙️ Vérification des modèles Kokoro ONNX...")
-    model_path, voices_path = await asyncio.to_thread(ensure_models)
+    loop = asyncio.get_running_loop()
     
-    print("🧠 Chargement de Kokoro (cela peut prendre quelques secondes)...")
-    kokoro = await asyncio.to_thread(Kokoro, model_path, voices_path)
-    print("✅ Modèle chargé !")
-
-    print("🔌 Connexion au serveur NATS...")
+    # Optimisation Linux : On s'assure que le process a une priorité décente
     try:
-        nc = await nats.connect("nats://localhost:4222")
-    except Exception as e:
-        print(f"❌ Erreur de connexion à NATS: {e}")
-        return
-    print("✅ Connecté au système nerveux (NATS).")
+        os.nice(-5)
+        print("⚡ Priorité processus ajustée (Nice -5)")
+    except PermissionError:
+        print("ℹ️ Lance en sudo ou configure un-security pour débloquer la priorité max.")
 
-    # Démarrage du worker
-    player_task = asyncio.create_task(audio_player_worker(nc))
+    print("⚙️ Vérification des artifacts...")
+    model_path, voices_path = await loop.run_in_executor(inference_executor, ensure_models)
+    
+    # Parallélisation du chargement du moteur et de la connexion réseau NATS
+    print("🧠 Initialisation du moteur ONNX & Connexion NATS...")
+    
+    async def load_engine():
+        return await loop.run_in_executor(inference_executor, build_optimized_kokoro, model_path, voices_path)
+
+    kokoro_task = asyncio.create_task(load_engine())
+    nats_task = asyncio.create_task(nats.connect("nats://localhost:4222"))
+    
+    kokoro, nc = await asyncio.gather(kokoro_task, nats_task)
+    print("🚀 Matériel synchronisé et connecté à NATS.")
+
+    # Warmup thermique du modèle
+    print("🔥 Exécution du cycle de Pre-warming...")
+    await loop.run_in_executor(
+        inference_executor, 
+        kokoro.create, ".", VOICE_NAME, SPEECH_SPEED, "fr-fr"
+    )
+    print("⚡ Moteur brûlant. Prêt à foudroyer le TTFS.")
+
+    # Lancement du thread audio natif
+    audio_thread = loop.run_in_executor(None, native_audio_player_worker, loop, nc)
 
     async def fragment_handler(msg):
         try:
@@ -115,45 +138,37 @@ async def main():
             is_last = data.get("is_last", False)
             
             if not text.strip():
-                # Si c'est le dernier fragment mais qu'il est vide, on peut notifier le player
                 if is_last:
-                    # On envoie un fragment vide pour que le end event soit généré
-                    await audio_queue.put((np.zeros(100), 22050, sequence, "", is_last))
+                    audio_sync_queue.put((np.zeros(100), sequence, "", is_last))
                 return
             
-            # La génération TTS prend du temps et est CPU bound. 
-            # On l'exécute dans un thread pool pour ne pas bloquer les autres messages NATS.
-            def generate_audio():
-                print(f"[io_voix] ⏳ Synthèse de : '{text}'")
+            # Inférence poussée direct dans notre exécuteur calibré à 6 threads
+            def inference_job():
                 try:
-                    # lang "fr-fr" pour les voix fr (Kokoro gère le choix de la langue en fonction de la syntaxe attendue)
                     return kokoro.create(text, voice=VOICE_NAME, speed=SPEECH_SPEED, lang="fr-fr")
                 except Exception as e:
-                    print(f"⚠️ Erreur de synthèse : {e}")
+                    print(f"⚠️ Échec d'inférence : {e}")
                     return None
-                    
-            result = await asyncio.to_thread(generate_audio)
+
+            result = await loop.run_in_executor(inference_executor, inference_job)
             
             if result:
-                samples, sample_rate = result
-                # Ajouter à la queue pour que le player l'enchaîne
-                await audio_queue.put((samples, sample_rate, sequence, text, is_last))
+                samples, _ = result
+                audio_sync_queue.put((samples, sequence, text, is_last))
                 
         except Exception as e:
-            print(f"⚠️ Erreur dans le handler fragment: {e}")
+            print(f"⚠️ Erreur Stream Handler: {e}")
 
     await nc.subscribe("lobe.fragment_stream", cb=fragment_handler)
-    print("👂 I/O Voix en écoute sur 'lobe.fragment_stream'...")
+    print("👂 Écoute réseau active sur 'lobe.fragment_stream'. Donnez-moi du texte.")
 
     try:
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(3600)
     except KeyboardInterrupt:
-        print("\nArrêt du service I/O Voix...")
+        print("\nArrêt propre du pipeline...")
     finally:
-        await audio_queue.put((None, None, None, None, None)) # Stopper le worker
-        if not player_task.done():
-            await player_task
+        audio_sync_queue.put(None)
         await nc.close()
 
 if __name__ == '__main__':
