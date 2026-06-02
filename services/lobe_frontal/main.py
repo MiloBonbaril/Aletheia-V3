@@ -116,6 +116,7 @@ async def main():
         data = json.loads(msg.data.decode())
         prompt = data.get("prompt", "")
         images = data.get("images", [])
+        audio = data.get("audio", None)
         
         history = []
         context_summary = None
@@ -137,12 +138,12 @@ async def main():
         # Récupération parallèle
         await asyncio.gather(fetch_history(), fetch_context_summary())
 
-        messages = prompt_builder.build(prompt, images, history, context_summary)
+        messages = prompt_builder.build(prompt, images, audio, history, context_summary)
 
         # Log asynchrone du prompt utilisateur en tâche de fond
         asyncio.create_task(nc.publish(
             "hippocampe.history.add",
-            json.dumps({"role": "user", "content": prompt_builder.build_user_content_for_db(prompt, images)}).encode()
+            json.dumps({"role": "user", "content": prompt_builder.build_user_content_for_db(prompt, images, audio)}).encode()
         ))
 
         async with INFERENCE_SEMAPHORE:

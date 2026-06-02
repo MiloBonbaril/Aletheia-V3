@@ -13,6 +13,53 @@ struct TranscriptionEvent {
     text: String,
 }
 
+fn create_wav_data(samples: &[f32]) -> Vec<u8> {
+    let sample_rate = 16000u32;
+    let num_channels = 1u16;
+    let bits_per_sample = 16u16;
+    
+    let num_samples = samples.len();
+    let data_size = num_samples * 2; // 2 bytes per sample (16-bit)
+    let file_size = 36 + data_size;
+    
+    let mut wav = Vec::with_capacity(44 + data_size);
+    
+    // RIFF header
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(file_size as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    
+    // fmt subchunk
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // subchunk1 size
+    wav.extend_from_slice(&1u16.to_le_bytes());  // audio format (1 = PCM)
+    wav.extend_from_slice(&num_channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    let byte_rate = sample_rate * (num_channels as u32) * (bits_per_sample as u32) / 8;
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    let block_align = num_channels * bits_per_sample / 8;
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    
+    // data subchunk
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_size as u32).to_le_bytes());
+    
+    // Write PCM samples (convert f32 to i16)
+    for &sample in samples {
+        let clamped = sample.clamp(-1.0, 1.0);
+        let s = if clamped >= 0.0 {
+            (clamped * 32767.0) as i16
+        } else {
+            (clamped * 32768.0) as i16
+        };
+        wav.extend_from_slice(&s.to_le_bytes());
+    }
+    
+    wav
+}
+
+
 /// Try to locate libonnxruntime.so for the `ort` crate's `load-dynamic` feature.
 fn find_ort_dylib() -> Option<PathBuf> {
     // 1. Try asking Python where onnxruntime is installed
@@ -273,65 +320,82 @@ async fn main() -> Result<()> {
         }
     });
 
-    // 6. Thread 3 (STT) inside Tokio Runtime
-    info!("Loading STT model...");
-    // Initialisation propre d'une structure avec mise à jour des champs qui nous intéressent
-    let whisper_config = ct2rs::Config {
-        // 1. Le Métal
-        device: ct2rs::Device::CPU,
-        
-        // 2. Le Moteur Mathématique
-        // Laisse-le en Auto ! Le moteur va charger tes poids en Int8 depuis le disque, 
-        // et fera les activations matricielles en Float32 car ton Ryzen n'a pas les 
-        // instructions matérielles pour le Float16. C'est l'optimisation parfaite.
-        compute_type: ct2rs::ComputeType::AUTO, 
-        
-        // 3. Le Cerveau (L'ex-intra_threads)
-        // C'EST ICI QUE TOUT SE JOUE. On alloue 4 threads. Pourquoi pas 16 ? 
-        // Parce qu'au-delà de 4 threads sur de l'audio temps réel, le coût de 
-        // synchronisation entre les cœurs (Context Switching) devient plus lourd 
-        // que le calcul lui-même. 4 cœurs vont pulvériser l'inférence.
-        num_threads_per_replica: 16, 
-        
-        // 4. Parallélisme Tensoriel
-        // On met 'false'. C'est une technologie de data-center pour couper 
-        // un modèle de 70 Milliards de paramètres sur 4 ou 8 grosses cartes graphiques.
-        tensor_parallel: false,
-        
-        // 5. Indexation Matérielle
-        // On pointe vers le premier périphérique (ton CPU unique).
-        device_indices: vec![0],
-        
-        // 6. Gestion Asynchrone Interne
-        // 0 signifie que l'on utilise le comportement par défaut de la lib C++.
-        max_queued_batches: 0,
-        
-        // 7. Affinité CPU (Pinning)
-        // -1 indique qu'on laisse l'ordonnanceur (Scheduler) de ton OS Linux/Windows 
-        // décider sur quels cœurs physiques envoyer le travail. C'est plus sûr sur un PC portable.
-        cpu_core_offset: -1,
-    };
-    let whisper = ct2rs::Whisper::new("model/whisper-small-ct2", whisper_config).unwrap();
-    let whisper_options = ct2rs::WhisperOptions::default();
-    let stt_language: Option<String> = std::env::var("STT_LANGUAGE").ok();
-    
-    info!("STT ready (language: {}). Waiting for speech events...", 
-        stt_language.as_deref().unwrap_or("auto-detect"));
-    while let Some(speech) = rx_speech.recv().await {
-        info!("Received speech chunk of len {}", speech.len());
-        let start = std::time::Instant::now();
-        let lang = stt_language.as_deref();
-        match whisper.generate(&speech, lang, false, &whisper_options) {
-            Ok(result) => {
-                let text = result.join(" ");
-                info!("Transcribed in {:?}: {}", start.elapsed(), text);
-                
-                let event = TranscriptionEvent { text: text.clone() };
-                let payload = serde_json::to_vec(&event).unwrap();
-                client.publish("io.user.speak".to_string(), payload.into()).await.unwrap();
+    let raw_mode = std::env::var("RAW_AUDIO").map(|v| v == "true" || v == "1").unwrap_or(false);
+
+    if raw_mode {
+        info!("Running in RAW AUDIO mode. Whisper model will NOT be loaded.");
+        while let Some(speech) = rx_speech.recv().await {
+            info!("Received speech chunk of len {} (raw mode)", speech.len());
+            let start = std::time::Instant::now();
+            let wav_data = create_wav_data(&speech);
+            use base64::Engine;
+            let b64_wav = base64::engine::general_purpose::STANDARD.encode(&wav_data);
+            
+            let event = serde_json::json!({
+                "audio": b64_wav,
+                "format": "wav"
+            });
+            match serde_json::to_vec(&event) {
+                Ok(payload) => {
+                    if let Err(e) = client.publish("io.user.speak.raw".to_string(), payload.into()).await {
+                        error!("Failed to publish raw audio: {:?}", e);
+                    } else {
+                        info!("Published raw audio to NATS in {:?}", start.elapsed());
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to serialize raw audio event: {:?}", e);
+                }
             }
-            Err(e) => {
-                error!("Whisper transcription failed: {}. Try setting STT_LANGUAGE=fr (or en, etc.)", e);
+        }
+    } else {
+        // 6. Thread 3 (STT) inside Tokio Runtime
+        info!("Loading STT model...");
+        // Initialisation propre d'une structure avec mise à jour des champs qui nous intéressent
+        let whisper_config = ct2rs::Config {
+            // 1. Le Métal
+            device: ct2rs::Device::CPU,
+            
+            // 2. Le Moteur Mathématique
+            compute_type: ct2rs::ComputeType::AUTO, 
+            
+            // 3. Le Cerveau (L'ex-intra_threads)
+            num_threads_per_replica: 16, 
+            
+            // 4. Parallélisme Tensoriel
+            tensor_parallel: false,
+            
+            // 5. Indexation Matérielle
+            device_indices: vec![0],
+            
+            // 6. Gestion Asynchrone Interne
+            max_queued_batches: 0,
+            
+            // 7. Affinité CPU (Pinning)
+            cpu_core_offset: -1,
+        };
+        let whisper = ct2rs::Whisper::new("model/whisper-small-ct2", whisper_config).unwrap();
+        let whisper_options = ct2rs::WhisperOptions::default();
+        let stt_language: Option<String> = std::env::var("STT_LANGUAGE").ok();
+        
+        info!("STT ready (language: {}). Waiting for speech events...", 
+            stt_language.as_deref().unwrap_or("auto-detect"));
+        while let Some(speech) = rx_speech.recv().await {
+            info!("Received speech chunk of len {}", speech.len());
+            let start = std::time::Instant::now();
+            let lang = stt_language.as_deref();
+            match whisper.generate(&speech, lang, false, &whisper_options) {
+                Ok(result) => {
+                    let text = result.join(" ");
+                    info!("Transcribed in {:?}: {}", start.elapsed(), text);
+                    
+                    let event = TranscriptionEvent { text: text.clone() };
+                    let payload = serde_json::to_vec(&event).unwrap();
+                    client.publish("io.user.speak".to_string(), payload.into()).await.unwrap();
+                }
+                Err(e) => {
+                    error!("Whisper transcription failed: {}. Try setting STT_LANGUAGE=fr (or en, etc.)", e);
+                }
             }
         }
     }

@@ -158,7 +158,10 @@ def render_transaction_report(tx, graph):
             payload = tx["payloads"].get(step_id, {})
             details = step["description"]
             if step_id == "user_ingress":
-                details = f"📥 Msg: '{payload.get('text', '')}'"
+                if "audio" in payload:
+                    details = f"📥 [Audio RAW] ({len(payload.get('audio', ''))} chars)"
+                else:
+                    details = f"📥 Msg: '{payload.get('text', '')}'"
             elif step_id == "cortex_dispatch":
                 details = f"🧠 Cortex a routé le message vers Lobe Frontal"
             elif step_id == "lobe_first_fragment":

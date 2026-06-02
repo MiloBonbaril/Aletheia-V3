@@ -11,6 +11,11 @@
       "topic": "io.user.speak",
       "service": "io_oreilles",
       "description": "Transcription vocale détectée de l'utilisateur"
+    },
+    {
+      "topic": "io.user.speak.raw",
+      "service": "io_oreilles",
+      "description": "Audio brut de la parole de l'utilisateur"
     }
   ],
   "steps": [
@@ -18,7 +23,7 @@
       "id": "user_ingress",
       "name": "Entrée Utilisateur",
       "description": "Détection initiale du message utilisateur",
-      "topics": ["io.user.msg.text", "io.user.speak"],
+      "topics": ["io.user.msg.text", "io.user.speak", "io.user.speak.raw"],
       "display_color": "cyan"
     },
     {

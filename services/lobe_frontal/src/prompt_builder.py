@@ -99,7 +99,7 @@ class PromptBuilder:
             pass
         return False
 
-    def build(self, prompt: str, images: list[str] = None, history: list[dict] = None, context_summary: str = None) -> list[dict]:
+    def build(self, prompt: str, images: list[str] = None, audio: str = None, history: list[dict] = None, context_summary: str = None) -> list[dict]:
         messages = [{"role": "system", "content": self.build_system_prompt(context_summary)}]
         current_time = time.time()
 
@@ -134,13 +134,24 @@ class PromptBuilder:
 
         # Ajout du prompt courant
         timestamp_prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-        if images:
-            user_content = [{"type": "text", "text": timestamp_prefix + prompt}]
-            for img_url in images:
-                if self._is_discord_url_expired(img_url, current_time):
-                    user_content.append({"type": "text", "text": "[Image jointe expirée]"})
-                else:
-                    user_content.append({"type": "image_url", "image_url": {"url": img_url}})
+        if images or audio:
+            user_content = []
+            if prompt:
+                user_content.append({"type": "text", "text": timestamp_prefix + prompt})
+            if images:
+                for img_url in images:
+                    if self._is_discord_url_expired(img_url, current_time):
+                        user_content.append({"type": "text", "text": "[Image jointe expirée]"})
+                    else:
+                        user_content.append({"type": "image_url", "image_url": {"url": img_url}})
+            if audio:
+                user_content.append({
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": audio,
+                        "format": "wav"
+                    }
+                })
             messages.append({"role": "user", "content": user_content})
         else:
             messages.append({"role": "user", "content": timestamp_prefix + prompt})
@@ -165,10 +176,19 @@ class PromptBuilder:
 
         return compacted
 
-    def build_user_content_for_db(self, prompt: str, images: list[str] = None) -> str | list[dict]:
-        if images:
+    def build_user_content_for_db(self, prompt: str, images: list[str] = None, audio: str = None) -> str | list[dict]:
+        if images or audio:
             content = [{"type": "text", "text": prompt}] if prompt else []
-            for img_url in images:
-                content.append({"type": "image_url", "image_url": {"url": img_url}})
+            if images:
+                for img_url in images:
+                    content.append({"type": "image_url", "image_url": {"url": img_url}})
+            if audio:
+                content.append({
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": audio,
+                        "format": "wav"
+                    }
+                })
             return content
         return prompt

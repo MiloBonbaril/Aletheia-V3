@@ -23,12 +23,22 @@ Ce document définit les contrats de données et les flux de messages circulant 
   ```
 
 #### `io.user.speak`
-Événement déclenché par le pipeline STT (`io_oreilles`) lors de la détection d'une phrase complète.
+Événement déclenché par le pipeline STT (`io_oreilles`) lors de la détection d'une phrase complète (mode Whisper).
 - **Payload (JSON) :**
   ```json
   {
     "text": "Contenu transcrit par Whisper",
     "confidence": 0.98
+  }
+  ```
+
+#### `io.user.speak.raw`
+Événement déclenché par le service `io_oreilles` lors de la détection de parole en mode RAW (`RAW_AUDIO=true`).
+- **Payload (JSON) :**
+  ```json
+  {
+    "audio": "base64...",
+    "format": "wav"
   }
   ```
 
@@ -42,7 +52,8 @@ L'ordre d'inférence envoyé par le Cortex au Lobe Frontal.
   ```json
   {
     "prompt": "Texte brut du prompt final",
-    "images": []
+    "images": [],
+    "audio": "base64... (optionnel)"
   }
   ```
 

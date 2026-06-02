@@ -14,6 +14,8 @@ struct PromptPayload {
     prompt: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     images: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -43,7 +45,7 @@ pub struct EventEnvelope {
 
 #[derive(Debug, Clone)]
 pub enum EventPayload {
-    PromptInbound { text: String, images: Vec<String> },
+    PromptInbound { text: String, images: Vec<String>, audio: Option<String> },
     LobeFragment { sequence: usize, text: String, is_last: bool },
     FatalSystemError(String),
 }
@@ -113,8 +115,8 @@ async fn run_dispatcher_worker(
         let _guard = span.enter();
 
         match event.payload {
-            EventPayload::PromptInbound { text, images } => {
-                info!("📥 Routing inbound prompt (length: {}, images: {})", text.len(), images.len());
+            EventPayload::PromptInbound { text, images, audio } => {
+                info!("📥 Routing inbound prompt (length: {}, images: {}, has_audio: {})", text.len(), images.len(), audio.is_some());
                 
                 // Track session start
                 active_sessions.insert(event.session_id.clone(), SessionContext {
@@ -122,7 +124,7 @@ async fn run_dispatcher_worker(
                     total_fragments: 0,
                 });
 
-                let prompt_msg = PromptPayload { prompt: text, images };
+                let prompt_msg = PromptPayload { prompt: text, images, audio };
                 
                 if let Ok(payload_bytes) = serde_json::to_vec(&prompt_msg) {
                     if let Err(e) = nats.publish("cortex.prompt", payload_bytes.into()).await {
@@ -207,8 +209,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             dispatcher_io.process_envelope(
                 corr_id,
                 &session_id,
-                EventPayload::PromptInbound { text: prompt_text, images }
+                EventPayload::PromptInbound { text: prompt_text, images, audio: None }
             ).await;
+        }
+    });
+
+    // 5b. Ingestion Raw Audio -> Dispatcher
+    let mut raw_audio_subscriber = nats_client.subscribe("io.user.speak.raw").await?;
+    let dispatcher_audio = dispatcher.clone();
+    let _audio_handle = tokio::spawn(async move {
+        #[derive(Deserialize)]
+        struct RawAudioPayload {
+            audio: String,
+            #[serde(default)]
+            _format: String,
+        }
+
+        info!("👂 Cortex Ingress Listening on 'io.user.speak.raw'...");
+        while let Some(msg) = raw_audio_subscriber.next().await {
+            if let Ok(payload) = serde_json::from_slice::<RawAudioPayload>(&msg.payload) {
+                let corr_id = Uuid::new_v4();
+                let session_id = "global_session".to_string();
+
+                dispatcher_audio.process_envelope(
+                    corr_id,
+                    &session_id,
+                    EventPayload::PromptInbound {
+                        text: "".to_string(),
+                        images: vec![],
+                        audio: Some(payload.audio),
+                    }
+                ).await;
+            } else {
+                warn!("⚠️ Ingression Error: Unsupported raw audio format.");
+            }
         }
     });
 
