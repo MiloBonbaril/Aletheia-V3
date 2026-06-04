@@ -81,6 +81,9 @@ class Text(commands.Cog):
         if not message.content and not message.attachments:
             return
 
+        if message.channel.id != Config.TEXT_CHANNEL_ID:
+            return
+
         self.active_channel = message.channel
 
         if self.nc:

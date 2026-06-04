@@ -1,0 +1,51 @@
+{
+  "name": "Text-to-Text Latency Graph (T2T)",
+  "description": "Mesure du parcours complet du message utilisateur jusqu'au dernier token généré par le Lobe Frontal",
+  "ingress_points": [
+    {
+      "topic": "io.user.msg.text",
+      "service": "io_text / io_discord",
+      "description": "Message texte envoyé par l'utilisateur"
+    }
+  ],
+  "steps": [
+    {
+      "id": "user_ingress",
+      "name": "Entrée Utilisateur",
+      "description": "Détection initiale du message utilisateur",
+      "topics": [
+        "io.user.msg.text"
+      ],
+      "display_color": "cyan"
+    },
+    {
+      "id": "cortex_dispatch",
+      "name": "Aiguillage Cortex",
+      "description": "Routage du message par le Cortex vers le Lobe Frontal",
+      "topics": [
+        "cortex.prompt"
+      ],
+      "display_color": "magenta"
+    },
+    {
+      "id": "lobe_first_fragment",
+      "name": "Premier Fragment (TTFT)",
+      "description": "Réception du premier token textuel du Lobe Frontal (Time-to-First-Token)",
+      "topics": [
+        "lobe.fragment_stream"
+      ],
+      "filter": "payload.get('sequence') == 0",
+      "display_color": "yellow"
+    },
+    {
+      "id": "lobe_last_fragment",
+      "name": "Dernier Fragment LLM",
+      "description": "Fin de la génération de texte par le Lobe Frontal",
+      "topics": [
+        "lobe.fragment_stream"
+      ],
+      "filter": "payload.get('is_last') is True",
+      "display_color": "blue"
+    }
+  ]
+}
