@@ -111,6 +111,13 @@ async def main():
         logger.error(f"Échec NATS: {e}")
         return
     logger.info("✅ Connecté à NATS.")
+    logger.info("Connection au serveur d'inférence...")
+    try:
+        models = await interface.get_models()
+        logger.info(f"✅ Connecté au serveur d'inférence! Modèles disponibles: {models}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la connexion au serveur d'inférence: {e}")
+        raise Exception("Erreur lors de la connexion au serveur d'inférence")
 
     async def prompt_handler(msg):
         data = json.loads(msg.data.decode())

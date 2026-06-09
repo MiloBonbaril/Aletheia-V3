@@ -15,13 +15,16 @@ class OpenAIInterface:
                 timeout=30.0
             )
             self.openai_client = AsyncOpenAI(
-                base_url="http://192.168.1.2:8080/v1", 
+                base_url="http://127.0.0.1:8080/v1", 
                 api_key="sk-vide",
                 http_client=http_client
             )
             logger.info("✅ Interface OpenAI initialisée.")
         except Exception as e:
             logger.error(f"Erreur d'initialisation de OpenAI: {e}")
+
+    async def get_models(self):
+        return await self.openai_client.models.list()
 
     async def get_stream(self, messages: list, model, tools, temperature, top_p, reasoning_effort):
         logger.info("Envoi immédiat de la requête LLM...")
@@ -31,5 +34,6 @@ class OpenAIInterface:
             tools=tools if tools else None,  # Évite d'envoyer un tableau vide inutile
             stream=True,
             temperature=temperature,
-            top_p=top_p
+            top_p=top_p,
+            reasoning_effort=reasoning_effort
         )
