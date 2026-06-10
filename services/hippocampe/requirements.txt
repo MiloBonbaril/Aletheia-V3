@@ -1,6 +1,6 @@
 nats-py==2.9.0
 python-dotenv==1.0.1
-sqlalchemy==2.0.30
-asyncpg==0.29.0
+sqlalchemy>=2.0.35
+asyncpg>=0.30.0
 qdrant-client==1.9.1
 sentence-transformers==3.0.1

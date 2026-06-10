@@ -26,9 +26,10 @@ INFERENCE_SEMAPHORE = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_INFERENCE"
 # Configuration LLM forcée sur notre interface optimisée
 interface = OpenAIInterface()
 MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
-TEMPERATURE = float(os.getenv("TEMPERATURE", 0.6))
+TEMPERATURE = float(os.getenv("TEMPERATURE", 0.9))
 TOP_P = float(os.getenv("TOP_P", 0.95))
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "default")
+logger.info(asyncio.run(interface.get_model_details(MODEL)))
 
 prompt_builder = PromptBuilder()
 

@@ -113,26 +113,70 @@ def render_transaction_report(tx, graph):
         subtitle=f"ID Transaction: {tx['id']} | Début: {datetime.fromtimestamp(tx['start_time']).strftime('%Y-%m-%d %H:%M:%S')}"
     ))
 
-    # Calculate individual segments
-    # 1. Ingress -> Cortex
+    # Calculate individual segments and total latency depending on graph structure
+    step_ids = [step["id"] for step in graph.steps]
     t_start = tx["start_time"]
-    t_cortex = tx["timestamps"].get("cortex_dispatch", t_start)
-    duration_cortex_latency = t_cortex - t_start
-    
-    # 2. Cortex -> First token (TTFT)
-    t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_cortex)
-    duration_llm_ttft = t_lobe_first - t_cortex
-    
-    # 3. First token -> Voice Start
-    t_voice_start = tx["timestamps"].get("voice_playback_start", t_lobe_first)
-    duration_tts_latency = t_voice_start - t_lobe_first
-    
-    # 4. Voice Start -> Voice End (Actual speaking time)
-    t_voice_end = tx["timestamps"].get("voice_playback_end", t_voice_start)
-    duration_playback = t_voice_end - t_voice_start
-    
-    # Total Latency
-    duration_total = t_voice_end - t_start
+
+    if "voice_playback_end" in step_ids:
+        # E2E Graph segments
+        t_cortex = tx["timestamps"].get("cortex_dispatch", t_start)
+        duration_cortex_latency = t_cortex - t_start
+        
+        t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_cortex)
+        duration_llm_ttft = t_lobe_first - t_cortex
+        
+        t_voice_start = tx["timestamps"].get("voice_playback_start", t_lobe_first)
+        duration_tts_latency = t_voice_start - t_lobe_first
+        
+        t_voice_end = tx["timestamps"].get("voice_playback_end", t_voice_start)
+        duration_playback = t_voice_end - t_voice_start
+        
+        duration_total = t_voice_end - t_start
+
+        segments = [
+            {"name": "Liaison Cortex", "duration": duration_cortex_latency, "style": "bold blue"},
+            {"name": "Inférence LLM (TTFT)", "duration": duration_llm_ttft, "style": "bold magenta"},
+            {"name": "Synthèse TTS", "duration": duration_tts_latency, "style": "bold yellow"},
+            {"name": "Lecture Audio", "duration": duration_playback, "style": "bold green"}
+        ]
+    elif "lobe_last_fragment" in step_ids:
+        # T2T Graph segments
+        t_cortex = tx["timestamps"].get("cortex_dispatch", t_start)
+        duration_cortex_latency = t_cortex - t_start
+        
+        t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_cortex)
+        duration_llm_ttft = t_lobe_first - t_cortex
+        
+        t_lobe_last = tx["timestamps"].get("lobe_last_fragment", t_lobe_first)
+        duration_generation = t_lobe_last - t_lobe_first
+        
+        duration_total = t_lobe_last - t_start
+
+        segments = [
+            {"name": "Liaison Cortex", "duration": duration_cortex_latency, "style": "bold blue"},
+            {"name": "Inférence LLM (TTFT)", "duration": duration_llm_ttft, "style": "bold magenta"},
+            {"name": "Génération LLM", "duration": duration_generation, "style": "bold green"}
+        ]
+    else:
+        # Generic fallback: build segments sequentially for all steps present in the graph
+        segments = []
+        last_t = t_start
+        colors = ["bold blue", "bold magenta", "bold yellow", "bold green", "bold cyan", "bold red"]
+        
+        for idx, step in enumerate(graph.steps):
+            if idx == 0:
+                continue
+            step_id = step["id"]
+            t_step = tx["timestamps"].get(step_id, last_t)
+            duration = t_step - last_t
+            segments.append({
+                "name": step["name"],
+                "duration": duration,
+                "style": colors[(idx - 1) % len(colors)]
+            })
+            last_t = t_step
+            
+        duration_total = last_t - t_start
 
     # Metrics Table
     table = Table(box=ROUNDED, show_header=True, header_style="bold cyan")
@@ -192,12 +236,6 @@ def render_transaction_report(tx, graph):
     console.print(table)
 
     # Horizontal Timeline Panel
-    segments = [
-        {"name": "Liaison Cortex", "duration": duration_cortex_latency, "style": "bold blue"},
-        {"name": "Inférence LLM (TTFT)", "duration": duration_llm_ttft, "style": "bold magenta"},
-        {"name": "Synthèse TTS", "duration": duration_tts_latency, "style": "bold yellow"},
-        {"name": "Lecture Audio", "duration": duration_playback, "style": "bold green"}
-    ]
     
     timeline_text = Text("\n📊 Répartition de la latence :\n", style="bold white")
     timeline_bar = draw_horizontal_bar(console.width, segments)
@@ -235,8 +273,10 @@ async def monitor_timeouts(graph):
             last_event_time = max(tx["timestamps"].values()) if tx["timestamps"] else tx["start_time"]
             if now - last_event_time > 15.0:
                 console.print(f"\n[bold yellow]⚠️  Timeout de transaction détecté (aucun événement depuis 15s). Génération du rapport partiel...[/bold yellow]")
-                # Fill remaining step timestamps with None if missing, but print what we have
-                tx["timestamps"]["voice_playback_end"] = last_event_time
+                # Fill final step timestamp if missing to generate the report properly
+                final_step_id = graph.steps[-1]["id"]
+                if final_step_id not in tx["timestamps"]:
+                    tx["timestamps"][final_step_id] = last_event_time
                 render_transaction_report(tx, graph)
                 to_remove.append(tx_id)
                 
@@ -339,8 +379,8 @@ async def main():
                         )
                         
                         # Check if transaction is completed
-                        # In our E2E flow, the transaction ends when voice_playback_end is reached
-                        if step_id == "voice_playback_end":
+                        # The transaction ends when the last step of the graph is reached
+                        if step_id == graph.steps[-1]["id"]:
                             current_tx["completed"] = True
                             # Remove from active and draw report
                             tx_id = current_tx["id"]
