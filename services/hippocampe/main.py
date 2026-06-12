@@ -21,6 +21,7 @@ async def try_init_db():
 
 async def main():
     await try_init_db()
+    await rag_manager.ensure_collection()
 
     print("🧠 Hippocampe en attente de connexion à NATS...")
     try:
@@ -31,20 +32,57 @@ async def main():
 
     print("✅ Hippocampe connecté au système nerveux (NATS).")
 
-    # ── Historique ──
+    # ── Handler principal : Construction passive du contexte ──
 
-    async def get_history_handler(msg):
-        """Retourne les N derniers messages de l'historique."""
+    async def context_build_handler(msg):
+        """
+        Reçoit une demande de construction de contexte du Cortex.
+        Exécute en PARALLÈLE la récupération de l'historique PostgreSQL
+        et la recherche RAG Qdrant, puis publie le résultat complet
+        sur hippocampe.context.ready.
+        """
+        t_start = time.perf_counter()
+
         try:
             data = json.loads(msg.data.decode())
-            n = data.get("n", 20)
         except (json.JSONDecodeError, Exception):
-            n = 20
+            print("[Hippocampe] ⚠️ Payload context.build invalide, ignoré.")
+            return
 
-        print(f"[Hippocampe] Requête historique reçue (n={n})")
-        history = await get_recent_history(n)
-        response = {"history": history}
-        await nc.publish(msg.reply, json.dumps(response).encode())
+        prompt = data.get("prompt", "")
+        correlation_id = data.get("correlation_id", "")
+        n_history = data.get("n_history", 20)
+
+        print(f"[Hippocampe] 📥 Context build reçu (corr={correlation_id[:8]}..., prompt_len={len(prompt)})")
+
+        # Exécution parallèle des 2 sources de données
+        history_result, rag_result = await asyncio.gather(
+            get_recent_history(n_history),
+            rag_manager.query_memory_async(prompt) if prompt else _empty_coroutine(),
+            return_exceptions=True
+        )
+
+        # Gestion des erreurs individuelles
+        if isinstance(history_result, Exception):
+            print(f"[Hippocampe] ⚠️ Erreur historique: {history_result}")
+            history_result = []
+        if isinstance(rag_result, Exception):
+            print(f"[Hippocampe] ⚠️ Erreur RAG: {rag_result}")
+            rag_result = ""
+
+        response = {
+            "correlation_id": correlation_id,
+            "history": history_result,
+            "rag_results": rag_result or "",
+            "context_summary": ""  # Stub pour résumé contextuel futur
+        }
+
+        await nc.publish("hippocampe.context.ready", json.dumps(response).encode())
+
+        elapsed_ms = (time.perf_counter() - t_start) * 1000
+        print(f"[Hippocampe] ✅ Contexte publié (corr={correlation_id[:8]}..., {elapsed_ms:.1f}ms)")
+
+    # ── Écriture historique (fire-and-forget, inchangé) ──
 
     async def add_history_handler(msg):
         data = json.loads(msg.data.decode())
@@ -54,50 +92,38 @@ async def main():
         if role and content:
             await add_message(role, content)
 
-    # ── Résumé contextuel (stub) ──
-
-    async def context_summary_handler(msg):
-        """
-        Stub: retourne un résumé des 10 dernières minutes.
-        À implémenter plus tard avec un vrai résumé LLM.
-        Pour l'instant retourne un résumé vide.
-        """
-        print("[Hippocampe] Requête de résumé contextuel reçue (stub).")
-        response = {"summary": ""}
-        await nc.publish(msg.reply, json.dumps(response).encode())
-
-    # ── RAG ──
+    # ── RAG : requête active (conservé pour get_from_memory du LLM) ──
 
     async def rag_query_handler(msg):
         data = json.loads(msg.data.decode())
         prompt = data.get("prompt")
-        print(f"[Hippocampe] Requête RAG reçue: {prompt}")
-        result = rag_manager.query_memory(prompt)
-        response = {"result": result}
+        print(f"[Hippocampe] Requête RAG active reçue: {prompt}")
+        result = await rag_manager.query_memory_async(prompt)
+        response = {"result": result if result else "No relevant recent memories found."}
         await nc.publish(msg.reply, json.dumps(response).encode())
+
+    # ── RAG : écriture (conservé pour save_to_memory du LLM) ──
 
     async def rag_add_handler(msg):
         data = json.loads(msg.data.decode())
         content = data.get("content")
         print(f"[Hippocampe] Ajout RAG: {content}")
-        result = rag_manager.add_memory(content)
+        result = await rag_manager.add_memory_async(content)
         response = {"result": result}
         await nc.publish(msg.reply, json.dumps(response).encode())
 
     # ── Souscriptions NATS ──
 
-    await nc.subscribe("hippocampe.history.get", cb=get_history_handler)
+    await nc.subscribe("hippocampe.context.build", cb=context_build_handler)
     await nc.subscribe("hippocampe.history.add", cb=add_history_handler)
-    await nc.subscribe("hippocampe.context.summary", cb=context_summary_handler)
     await nc.subscribe("hippocampe.rag.query", cb=rag_query_handler)
     await nc.subscribe("hippocampe.rag.add", cb=rag_add_handler)
-    
-    print("👂 Hippocampe en écoute...")
-    print("   - hippocampe.history.get     (récupération historique)")
+
+    print("👂 Hippocampe en écoute (mode passif + actif)...")
+    print("   - hippocampe.context.build   (construction contexte parallèle)")
     print("   - hippocampe.history.add     (ajout historique)")
-    print("   - hippocampe.context.summary (résumé 10 min — stub)")
-    print("   - hippocampe.rag.query       (recherche RAG)")
-    print("   - hippocampe.rag.add         (ajout RAG)")
+    print("   - hippocampe.rag.query       (recherche RAG active / get_from_memory)")
+    print("   - hippocampe.rag.add         (ajout RAG / save_to_memory)")
 
     try:
         while True:
@@ -106,6 +132,10 @@ async def main():
         print("Arrêt de l'Hippocampe...")
     finally:
         await nc.drain()
+
+async def _empty_coroutine():
+    """Coroutine vide pour le cas où le prompt est vide."""
+    return ""
 
 if __name__ == '__main__':
     try:

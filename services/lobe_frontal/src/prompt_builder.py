@@ -74,12 +74,14 @@ class PromptBuilder:
             "  </tools>"
         )
 
-    def build_system_prompt(self, context_summary: str = None) -> str:
+    def build_system_prompt(self, context_summary: str = None, rag_results: str = None) -> str:
         sections = [
             "<system>\n  <persona>", self._persona, "  </persona>\n  <core_memory>",
             self._core_memory, "  </core_memory>\n  <users>", self._users, "  </users>",
             self._build_tools_xml()
         ]
+        if rag_results:
+            sections.extend(["\n  <recall>", rag_results, "  </recall>"])
         if context_summary:
             sections.extend(["\n  <context window=\"10min\">", context_summary, "  </context>"])
         sections.append("\n</system>")
@@ -99,8 +101,8 @@ class PromptBuilder:
             pass
         return False
 
-    def build(self, prompt: str, images: list[str] = None, audio: str = None, history: list[dict] = None, context_summary: str = None) -> list[dict]:
-        messages = [{"role": "system", "content": self.build_system_prompt(context_summary)}]
+    def build(self, prompt: str, images: list[str] = None, audio: str = None, history: list[dict] = None, context_summary: str = None, rag_results: str = None) -> list[dict]:
+        messages = [{"role": "system", "content": self.build_system_prompt(context_summary, rag_results)}]
         current_time = time.time()
 
         # Mutation en place ou reconstruction légère (Pas de deepcopy !)

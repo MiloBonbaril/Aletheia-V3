@@ -36,7 +36,7 @@ Afin de préserver la RTX pour le jeu en direct et le rendu OBS/VTube Studio, l'
 * **Streaming :** Bufferise les tokens, coupe sur la ponctuation forte, et publie les fragments de texte sur le Bus NATS.
 
 ### 📚 C. L'HIPPOCAMPE (Mémoire)
-* **Mémoire Épisodique (RAG) :** Qdrant en local. Alimentée et interrogée via Function Calling par le LLM.
+* **Mémoire Épisodique (RAG) :** Qdrant en local. Recherche passive déclenchée automatiquement à la réception de chaque message utilisateur, avec possibilité de recherche active via Function Calling pour les requêtes complexes.
 * **Mémoire Sémantique :** PostgreSQL (Paramètres, relations viewers, état global).
 
 ### 🎙️ D. LES CORTEX SENSORIELS ET MOTEURS (I/O)

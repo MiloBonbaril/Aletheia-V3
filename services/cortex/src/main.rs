@@ -16,6 +16,14 @@ struct PromptPayload {
     images: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<String>,
+    correlation_id: String,
+}
+
+#[derive(Serialize)]
+struct ContextBuildPayload {
+    prompt: String,
+    correlation_id: String,
+    n_history: usize,
 }
 
 #[derive(Deserialize, Debug)]
@@ -124,13 +132,37 @@ async fn run_dispatcher_worker(
                     total_fragments: 0,
                 });
 
-                let prompt_msg = PromptPayload { prompt: text, images, audio };
-                
-                if let Ok(payload_bytes) = serde_json::to_vec(&prompt_msg) {
-                    if let Err(e) = nats.publish("cortex.prompt", payload_bytes.into()).await {
-                        error!("⚠️ Failed to emit to Lobe Frontal: {}", e);
-                    } else {
-                        info!("📤 Prompt dispatched to Lobe Frontal successfully.");
+                let corr_id = event.correlation_id.to_string();
+
+                let prompt_msg = PromptPayload {
+                    prompt: text.clone(),
+                    images,
+                    audio,
+                    correlation_id: corr_id.clone(),
+                };
+
+                let context_msg = ContextBuildPayload {
+                    prompt: text,
+                    correlation_id: corr_id,
+                    n_history: 20,
+                };
+
+                // Dispatch parallèle vers le Lobe Frontal ET l'Hippocampe
+                let prompt_bytes = serde_json::to_vec(&prompt_msg);
+                let context_bytes = serde_json::to_vec(&context_msg);
+
+                match (prompt_bytes, context_bytes) {
+                    (Ok(pb), Ok(cb)) => {
+                        let (r1, r2) = tokio::join!(
+                            nats.publish("cortex.prompt", pb.into()),
+                            nats.publish("hippocampe.context.build", cb.into())
+                        );
+                        if let Err(e) = r1 { error!("⚠️ Failed to emit to Lobe Frontal: {}", e); }
+                        if let Err(e) = r2 { error!("⚠️ Failed to emit to Hippocampe: {}", e); }
+                        info!("📤 Prompt + Context build dispatched in parallel.");
+                    }
+                    (Err(e), _) | (_, Err(e)) => {
+                        error!("⚠️ Serialization error: {}", e);
                     }
                 }
             }

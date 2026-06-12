@@ -4,7 +4,7 @@ Ce document définit les contrats de données et les flux de messages circulant 
 
 ## 🔄 Flux de Données Principal
 
-`io.user.msg.text` $\rightarrow$ **Cortex** $\rightarrow$ `cortex.prompt` $\rightarrow$ **Lobe Frontal** $\rightarrow$ `lobe.fragment_stream` $\rightarrow$ **Cortex / I/O Voix**
+`io.user.msg.text` $\rightarrow$ **Cortex** $\rightarrow$ `cortex.prompt` + `hippocampe.context.build` (parallèle) $\rightarrow$ **Hippocampe** construit le contexte $\rightarrow$ `hippocampe.context.ready` $\rightarrow$ **Lobe Frontal** $\rightarrow$ `lobe.fragment_stream` $\rightarrow$ **Cortex / I/O Voix**
 
 ---
 
@@ -47,13 +47,37 @@ Ce document définit les contrats de données et les flux de messages circulant 
 ### 🧠 Cognition (Processing)
 
 #### `cortex.prompt`
-L'ordre d'inférence envoyé par le Cortex au Lobe Frontal.
+L'ordre d'inférence envoyé par le Cortex au Lobe Frontal. Inclut un `correlation_id` pour corréler avec le contexte mémoire.
 - **Payload (JSON) :**
   ```json
   {
     "prompt": "Texte brut du prompt final",
     "images": [],
-    "audio": "base64... (optionnel)"
+    "audio": "base64... (optionnel)",
+    "correlation_id": "uuid-v4"
+  }
+  ```
+
+#### `hippocampe.context.build`
+Demande de construction de contexte envoyée par le Cortex à l'Hippocampe. Déclenche la récupération parallèle de l'historique PostgreSQL et de la recherche RAG Qdrant.
+- **Payload (JSON) :**
+  ```json
+  {
+    "prompt": "Texte du message utilisateur",
+    "correlation_id": "uuid-v4",
+    "n_history": 20
+  }
+  ```
+
+#### `hippocampe.context.ready`
+Contexte pré-calculé publié par l'Hippocampe. Contient l'historique de conversation et les souvenirs RAG pertinents. Le Lobe Frontal attend ce message avant de lancer l'inférence LLM.
+- **Payload (JSON) :**
+  ```json
+  {
+    "correlation_id": "uuid-v4",
+    "history": [{"role": "user", "content": "..."}, ...],
+    "rag_results": "Souvenir 1\nSouvenir 2",
+    "context_summary": ""
   }
   ```
 
@@ -65,6 +89,50 @@ Flux de tokens/fragments renvoyés par le Lobe Frontal pour permettre un TTS tem
     "sequence": 1,
     "text": "Bonjour ",
     "is_last": false
+  }
+  ```
+
+---
+
+### 📚 Mémoire (Hippocampe)
+
+#### `hippocampe.history.add`
+Ajout d'un message dans l'historique PostgreSQL (fire-and-forget).
+- **Payload (JSON) :**
+  ```json
+  {
+    "role": "user|assistant|tool",
+    "content": "Contenu du message"
+  }
+  ```
+
+#### `hippocampe.rag.query`
+Recherche active dans la mémoire RAG (utilisé par le tool `get_from_memory` du LLM). Mode request-reply.
+- **Payload (JSON) :**
+  ```json
+  {
+    "prompt": "Requête de recherche"
+  }
+  ```
+- **Réponse :**
+  ```json
+  {
+    "result": "Résultats de la recherche"
+  }
+  ```
+
+#### `hippocampe.rag.add`
+Ajout d'un souvenir dans la mémoire RAG (utilisé par le tool `save_to_memory` du LLM). Mode request-reply.
+- **Payload (JSON) :**
+  ```json
+  {
+    "content": "Information à mémoriser"
+  }
+  ```
+- **Réponse :**
+  ```json
+  {
+    "result": "Successfully saved: ..."
   }
   ```
 

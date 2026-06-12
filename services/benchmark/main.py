@@ -122,8 +122,11 @@ def render_transaction_report(tx, graph):
         t_cortex = tx["timestamps"].get("cortex_dispatch", t_start)
         duration_cortex_latency = t_cortex - t_start
         
-        t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_cortex)
-        duration_llm_ttft = t_lobe_first - t_cortex
+        t_hippocampe = tx["timestamps"].get("hippocampe_ready", t_cortex)
+        duration_hippocampe = t_hippocampe - t_cortex
+        
+        t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_hippocampe)
+        duration_llm_ttft = t_lobe_first - t_hippocampe
         
         t_voice_start = tx["timestamps"].get("voice_playback_start", t_lobe_first)
         duration_tts_latency = t_voice_start - t_lobe_first
@@ -135,6 +138,7 @@ def render_transaction_report(tx, graph):
 
         segments = [
             {"name": "Liaison Cortex", "duration": duration_cortex_latency, "style": "bold blue"},
+            {"name": "Mémoire Hippocampe", "duration": duration_hippocampe, "style": "bold cyan"},
             {"name": "Inférence LLM (TTFT)", "duration": duration_llm_ttft, "style": "bold magenta"},
             {"name": "Synthèse TTS", "duration": duration_tts_latency, "style": "bold yellow"},
             {"name": "Lecture Audio", "duration": duration_playback, "style": "bold green"}
@@ -144,8 +148,11 @@ def render_transaction_report(tx, graph):
         t_cortex = tx["timestamps"].get("cortex_dispatch", t_start)
         duration_cortex_latency = t_cortex - t_start
         
-        t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_cortex)
-        duration_llm_ttft = t_lobe_first - t_cortex
+        t_hippocampe = tx["timestamps"].get("hippocampe_ready", t_cortex)
+        duration_hippocampe = t_hippocampe - t_cortex
+        
+        t_lobe_first = tx["timestamps"].get("lobe_first_fragment", t_hippocampe)
+        duration_llm_ttft = t_lobe_first - t_hippocampe
         
         t_lobe_last = tx["timestamps"].get("lobe_last_fragment", t_lobe_first)
         duration_generation = t_lobe_last - t_lobe_first
@@ -154,6 +161,7 @@ def render_transaction_report(tx, graph):
 
         segments = [
             {"name": "Liaison Cortex", "duration": duration_cortex_latency, "style": "bold blue"},
+            {"name": "Mémoire Hippocampe", "duration": duration_hippocampe, "style": "bold cyan"},
             {"name": "Inférence LLM (TTFT)", "duration": duration_llm_ttft, "style": "bold magenta"},
             {"name": "Génération LLM", "duration": duration_generation, "style": "bold green"}
         ]
@@ -208,6 +216,12 @@ def render_transaction_report(tx, graph):
                     details = f"📥 Msg: '{payload.get('text', '')}'"
             elif step_id == "cortex_dispatch":
                 details = f"🧠 Cortex a routé le message vers Lobe Frontal"
+            elif step_id == "hippocampe_ready":
+                history_count = len(payload.get("history", []))
+                rag_results = payload.get("rag_results", "")
+                rag_snippet = (rag_results[:60] + "...") if len(rag_results) > 60 else rag_results
+                rag_snippet = rag_snippet.replace('\n', ' ')
+                details = f"📚 Mémoire prête : {history_count} msgs hist | RAG: {rag_snippet}"
             elif step_id == "lobe_first_fragment":
                 details = f"💬 TTFT: '{payload.get('text', '')}'"
             elif step_id == "voice_playback_start":

@@ -28,6 +28,15 @@
       "display_color": "magenta"
     },
     {
+      "id": "hippocampe_ready",
+      "name": "Mémoire Hippocampe",
+      "description": "Récupération passive du contexte historique et RAG par l'Hippocampe",
+      "topics": [
+        "hippocampe.context.ready"
+      ],
+      "display_color": "blue"
+    },
+    {
       "id": "lobe_first_fragment",
       "name": "Premier Fragment (TTFT)",
       "description": "Réception du premier token textuel du Lobe Frontal (Time-to-First-Token)",

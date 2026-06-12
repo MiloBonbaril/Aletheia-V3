@@ -104,13 +104,14 @@ flowchart TB
 
     nats -->|Routes ingress events to| cortex
 
-    %% Cognitive Flows
-    cortex <-->|Retrieve & persist context| hippocampe
+    %% Cognitive Flows (Passive Memory Architecture)
+    cortex -->|Publishes<br/>cortex.prompt +<br/>hippocampe.context.build| nats
+    nats -->|context.build| hippocampe
     hippocampe <-->|Vector search / upsert| qdrant
     hippocampe <-->|Relational queries| postgres
+    hippocampe -->|Publishes<br/>hippocampe.context.ready| nats
 
-    cortex -->|Publishes<br/>cortex.prompt| nats
-    nats -->|Subscribes & processes| lobe
+    nats -->|cortex.prompt +<br/>context.ready| lobe
 
     lobe <-->|Streaming tokens inference| Compute_API
     lobe -->|Publishes fragments<br/>lobe.fragment_stream| nats

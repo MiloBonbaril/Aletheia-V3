@@ -120,33 +120,62 @@ async def main():
         logger.error(f"Erreur lors de la connexion au serveur d'inférence: {e}")
         raise Exception("Erreur lors de la connexion au serveur d'inférence")
 
+    # ── Attente passive du contexte hippocampe ──
+    pending_contexts: dict[str, asyncio.Future] = {}
+
+    async def context_ready_handler(msg):
+        """Reçoit le contexte pré-calculé par l'hippocampe."""
+        try:
+            data = json.loads(msg.data.decode())
+            corr_id = data.get("correlation_id", "")
+            if corr_id in pending_contexts and not pending_contexts[corr_id].done():
+                pending_contexts[corr_id].set_result(data)
+            else:
+                logger.warning(f"⚠️ Contexte reçu pour correlation_id inconnu ou expiré: {corr_id[:8]}...")
+        except Exception as e:
+            logger.error(f"Erreur parsing context.ready: {e}")
+
+    await nc.subscribe("hippocampe.context.ready", cb=context_ready_handler)
+    logger.info("👂 Lobe Frontal abonné à hippocampe.context.ready")
+
     async def prompt_handler(msg):
         data = json.loads(msg.data.decode())
         prompt = data.get("prompt", "")
         images = data.get("images", [])
         audio = data.get("audio", None)
-        
-        history = []
-        context_summary = None
+        correlation_id = data.get("correlation_id", "")
 
-        async def fetch_history():
-            nonlocal history
-            try:
-                res = await nc.request("hippocampe.history.get", json.dumps({"n": 20}).encode(), timeout=3.0)
-                history = json.loads(res.data.decode()).get("history", [])
-            except Exception as e: logger.error(f"Erreur historique: {e}")
+        # Créer un Future pour attendre le contexte de l'hippocampe
+        loop = asyncio.get_event_loop()
+        context_future = loop.create_future()
+        pending_contexts[correlation_id] = context_future
 
-        async def fetch_context_summary():
-            nonlocal context_summary
-            try:
-                res = await nc.request("hippocampe.context.summary", b"", timeout=3.0)
-                context_summary = json.loads(res.data.decode()).get("summary")
-            except Exception: pass
+        try:
+            # Attendre le contexte avec timeout
+            context_data = await asyncio.wait_for(context_future, timeout=0.5)
+            history = context_data.get("history", [])
+            rag_results = context_data.get("rag_results", "")
+            context_summary = context_data.get("context_summary") or None
+        except asyncio.TimeoutError:
+            logger.error(f"⏰ Timeout contexte hippocampe (corr={correlation_id[:8]}...), annulation de la génération.")
+            await nc.publish("lobe.fragment_stream", json.dumps({
+                "sequence": 0,
+                "text": "Il semblerait que j'ai des trous de mémoire...",
+                "is_last": True
+            }).encode())
+            return
+        except Exception as e:
+            logger.error(f"Erreur attente contexte: {e}")
+            await nc.publish("lobe.fragment_stream", json.dumps({
+                "sequence": 0,
+                "text": "Il semblerait que j'ai des trous de mémoire...",
+                "is_last": True
+            }).encode())
+            return
+        finally:
+            pending_contexts.pop(correlation_id, None)
 
-        # Récupération parallèle
-        await asyncio.gather(fetch_history(), fetch_context_summary())
-
-        messages = prompt_builder.build(prompt, images, audio, history, context_summary)
+        messages = prompt_builder.build(prompt, images, audio, history, context_summary, rag_results)
 
         # Log asynchrone du prompt utilisateur en tâche de fond
         asyncio.create_task(nc.publish(
