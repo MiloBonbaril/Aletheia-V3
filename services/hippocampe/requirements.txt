@@ -4,3 +4,4 @@ sqlalchemy>=2.0.35
 asyncpg>=0.30.0
 qdrant-client==1.9.1
 sentence-transformers==3.0.1
+psycopg2-binary>=2.9.9
