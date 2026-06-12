@@ -98,7 +98,7 @@ async def main():
         data = json.loads(msg.data.decode())
         prompt = data.get("prompt")
         print(f"[Hippocampe] Requête RAG active reçue: {prompt}")
-        result = await rag_manager.query_memory_async(prompt)
+        result = await rag_manager.query_memory_async(prompt, limit = 3, threshold = 0.1)
         response = {"result": result if result else "No relevant recent memories found."}
         await nc.publish(msg.reply, json.dumps(response).encode())
 

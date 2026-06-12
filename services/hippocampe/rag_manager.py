@@ -57,10 +57,11 @@ class RAGManager:
         except Exception as e:
             return f"Error saving memory: {e}"
 
-    async def query_memory_async(self, prompt: str, limit: int = 3) -> str:
+    async def query_memory_async(self, prompt: str, limit: int = 3, threshold: float = None) -> str:
         print(f"[RAG] Querying memory for: {prompt}")
         vector = self.encoder.encode([prompt], show_progress_bar=False)[0].tolist()
-
+        if threshold is None:
+            threshold = self.score_threshold
         try:
             search_result = await self.client.search(
                 collection_name=COLLECTION_NAME,
@@ -73,14 +74,14 @@ class RAGManager:
                 return ""
 
             # Filtrage par score de pertinence
-            filtered = [hit for hit in search_result if hit.score >= self.score_threshold]
+            filtered = [hit for hit in search_result if hit.score >= threshold]
 
             if not filtered:
-                print(f"[RAG] All results below threshold ({self.score_threshold}).")
+                print(f"[RAG] All results below threshold ({threshold}).")
                 return ""
 
             results = [hit.payload['content'] for hit in filtered]
-            print(f"[RAG] {len(filtered)} results (threshold={self.score_threshold}): {results}")
+            print(f"[RAG] {len(filtered)} results (threshold={threshold}): {results}")
             return "\n".join(results)
         except Exception as e:
             print("[RAG] Error querying memories: ", e)
