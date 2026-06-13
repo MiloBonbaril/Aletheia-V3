@@ -1,0 +1,84 @@
+name: Aletheia-V3 CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      nats:
+        image: nats:latest
+        ports:
+          - 4222:4222
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev g++ pkg-config
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Cortex tests
+        run: cargo test --manifest-path services/cortex/Cargo.toml
+
+      - name: Run io_oreilles tests
+        run: cargo test --manifest-path services/io_oreilles/Cargo.toml
+
+  python-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      nats:
+        image: nats:latest
+        ports:
+          - 4222:4222
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-level: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio numpy SQLAlchemy qdrant-client sentence-transformers psycopg2-binary py-cord[voice] nats-py python-dotenv groq openai mistralai httpx sounddevice soundfile requests rich
+
+      - name: Run benchmark tests
+        run: PYTHONPATH=services/benchmark pytest services/benchmark/tests/
+
+      - name: Run hippocampe tests
+        run: PYTHONPATH=services/hippocampe pytest services/hippocampe/tests/
+
+      - name: Run io_discord tests
+        run: PYTHONPATH=services/io_discord pytest services/io_discord/tests/
+
+      - name: Run io_text tests
+        run: PYTHONPATH=services/io_text pytest services/io_text/tests/
+
+      - name: Run io_voix tests
+        run: PYTHONPATH=services/io_voix pytest services/io_voix/tests/
+
+      - name: Run lobe_frontal tests
+        run: PYTHONPATH=services/lobe_frontal pytest services/lobe_frontal/tests/

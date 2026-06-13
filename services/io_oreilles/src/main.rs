@@ -402,3 +402,43 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_wav_data() {
+        let samples = vec![0.0; 16000]; // 1 second of silence
+        let wav = create_wav_data(&samples);
+        
+        // WAVE file size check: 44 bytes header + 16000 * 2 bytes samples = 32044 bytes
+        assert_eq!(wav.len(), 32044);
+        
+        // Assert header magic strings
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(&wav[36..40], b"data");
+        
+        // Assert PCM format identifier
+        let format_tag = u16::from_le_bytes([wav[20], wav[21]]);
+        assert_eq!(format_tag, 1); // 1 = PCM
+        
+        // Assert sample rate is 16000
+        let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]);
+        assert_eq!(sample_rate, 16000);
+        
+        // Assert block align is 2 (1 channel * 16-bit / 8)
+        let block_align = u16::from_le_bytes([wav[32], wav[33]]);
+        assert_eq!(block_align, 2);
+    }
+
+    #[test]
+    fn test_find_ort_dylib() {
+        // Just verify it returns Some or None and doesn't crash
+        let res = find_ort_dylib();
+        println!("Detected ORT dylib path: {:?}", res);
+    }
+}
+
