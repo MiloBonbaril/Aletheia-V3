@@ -324,3 +324,109 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_payload_serialization() {
+        let prompt_payload = PromptPayload {
+            prompt: "hello".to_string(),
+            images: vec![],
+            audio: None,
+            correlation_id: "test-corr-id".to_string(),
+        };
+        let serialized = serde_json::to_string(&prompt_payload).unwrap();
+        assert!(serialized.contains("prompt"));
+        assert!(serialized.contains("correlation_id"));
+        assert!(!serialized.contains("images")); // should skip serializing if empty
+        assert!(!serialized.contains("audio")); // should skip serializing if None
+
+        let prompt_payload_with_images = PromptPayload {
+            prompt: "hello".to_string(),
+            images: vec!["img1".to_string()],
+            audio: Some("audio_b64".to_string()),
+            correlation_id: "test-corr-id".to_string(),
+        };
+        let serialized_with_images = serde_json::to_string(&prompt_payload_with_images).unwrap();
+        assert!(serialized_with_images.contains("images"));
+        assert!(serialized_with_images.contains("audio"));
+    }
+
+    #[test]
+    fn test_context_build_serialization() {
+        let context_payload = ContextBuildPayload {
+            prompt: "hello".to_string(),
+            correlation_id: "corr".to_string(),
+            n_history: 10,
+        };
+        let serialized = serde_json::to_string(&context_payload).unwrap();
+        assert!(serialized.contains("prompt"));
+        assert!(serialized.contains("correlation_id"));
+        assert!(serialized.contains("n_history"));
+    }
+
+    #[test]
+    fn test_fragment_payload_deserialization() {
+        let json_data = r#"{"sequence": 2, "text": "hello fragment", "is_last": true}"#;
+        let payload: FragmentPayload = serde_json::from_str(json_data).unwrap();
+        assert_eq!(payload.sequence, 2);
+        assert_eq!(payload.text, "hello fragment");
+        assert!(payload.is_last);
+    }
+
+    #[test]
+    fn test_user_msg_payload_deserialization() {
+        let json_data = r#"{"text": "hello user", "images": ["img1"]}"#;
+        let payload: UserMsgPayload = serde_json::from_str(json_data).unwrap();
+        assert_eq!(payload.text, "hello user");
+        assert_eq!(payload.images, vec!["img1".to_string()]);
+
+        // test default images
+        let json_data_no_images = r#"{"text": "hello user"}"#;
+        let payload_no_images: UserMsgPayload = serde_json::from_str(json_data_no_images).unwrap();
+        assert_eq!(payload_no_images.text, "hello user");
+        assert!(payload_no_images.images.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dispatcher_process_envelope() {
+        // Try to connect to NATS, skip if not available
+        let nats_result = async_nats::connect("nats://localhost:4222").await;
+        let nats_client = match nats_result {
+            Ok(client) => client,
+            Err(_) => {
+                println!("NATS not available, skipping dispatcher integration test");
+                return;
+            }
+        };
+
+        let (tx, mut rx) = mpsc::channel::<EventEnvelope>(10);
+        let dispatcher = CortexDispatcher::new(nats_client, tx);
+
+        let corr_id = Uuid::new_v4();
+        let session_id = "test_sess";
+        let payload = EventPayload::PromptInbound {
+            text: "test message".to_string(),
+            images: vec![],
+            audio: None,
+        };
+
+        dispatcher.process_envelope(corr_id, session_id, payload).await;
+
+        if let Some(envelope) = rx.recv().await {
+            assert_eq!(envelope.correlation_id, corr_id);
+            assert_eq!(envelope.session_id, session_id);
+            match envelope.payload {
+                EventPayload::PromptInbound { text, .. } => {
+                    assert_eq!(text, "test message");
+                }
+                _ => panic!("Expected PromptInbound payload"),
+            }
+        } else {
+            panic!("Ingestion channel is empty");
+        }
+    }
+}
+
