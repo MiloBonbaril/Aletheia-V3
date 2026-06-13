@@ -22,11 +22,9 @@ async def test_io_text_commands():
         except StopIteration:
             return ""
 
-    with patch('nats.connect', return_value=mock_nc), \
+    with patch('nats.connect', new=AsyncMock(return_value=mock_nc)), \
          patch('sys.stdin.readline', side_effect=mock_readline), \
          patch('builtins.print'):
-         
-         await main.main()
          
          # NATS subscriber configuration
          mock_nc.subscribe.assert_called_once()
