@@ -41,7 +41,7 @@ async def add_message(role: str, content):
     async with AsyncSessionLocal() as db:
         try:
             new_msg = Message(role=role, content=content_str)
-            await db.add(new_msg)
+            db.add(new_msg)
             await db.commit() # Relaxe le GIL pendant l'attente I/O réseau
         except Exception as e:
             print(f"Error adding message to db: {e}")
