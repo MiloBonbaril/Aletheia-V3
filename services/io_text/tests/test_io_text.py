@@ -25,7 +25,8 @@ async def test_io_text_commands():
     with patch('nats.connect', new=AsyncMock(return_value=mock_nc)), \
          patch('sys.stdin.readline', side_effect=mock_readline), \
          patch('builtins.print'):
-         
+         await main.main()
+          
          # NATS subscriber configuration
          mock_nc.subscribe.assert_called_once()
          
@@ -57,7 +58,8 @@ async def test_io_text_clear_command():
     with patch('nats.connect', new=AsyncMock(return_value=mock_nc)), \
          patch('sys.stdin.readline', side_effect=mock_readline), \
          patch('builtins.print'):
-         
+         await main.main()
+          
          # NATS publish should only contain the good line
          mock_nc.publish.assert_called_once()
          topic, payload = mock_nc.publish.call_args[0]
