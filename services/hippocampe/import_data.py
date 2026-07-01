@@ -61,20 +61,14 @@ def import_postgres(rows: list[dict]) -> tuple[int, int]:
     try:
         cur = conn.cursor()
 
-        # Assure que la table existe
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                role VARCHAR(50) NOT NULL,
-                content TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT NOW()
-            );
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS ix_messages_timestamp
-            ON messages (timestamp DESC);
-        """)
-        conn.commit()
+        # Le schéma (table + index) est défini une seule fois, dans database.py (SQLAlchemy)
+        # et versionné via Alembic (migrations/) — on vérifie juste qu'il a bien été appliqué,
+        # plutôt que de dupliquer un second CREATE TABLE ici.
+        cur.execute("SELECT to_regclass('public.messages');")
+        if cur.fetchone()[0] is None:
+            print("❌ La table 'messages' n'existe pas. Appliquez d'abord les migrations :")
+            print("   cd services/hippocampe && alembic upgrade head")
+            sys.exit(1)
 
         # Charge les triplets existants pour déduplication rapide (set lookup O(1))
         cur.execute("SELECT role, content, timestamp FROM messages;")

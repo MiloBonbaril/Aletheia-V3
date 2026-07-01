@@ -1,11 +1,15 @@
 import os
+import asyncio
+from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import Column, Integer, String, Text, DateTime, text
+from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.future import select
 from datetime import datetime
 import json
 from dotenv import load_dotenv
+from alembic.config import Config
+from alembic import command
 
 load_dotenv()
 
@@ -16,21 +20,31 @@ Base = declarative_base()
 
 class Message(Base):
     __tablename__ = 'messages'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     role = Column(String(50), nullable=False) # 'user', 'assistant', 'system' (though system is dynamic so mostly user/assistant)
     content = Column(Text, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+    # Seule définition du schéma (table + index) : source de vérité partagée par
+    # l'application et par les migrations Alembic (migrations/versions/).
+    __table_args__ = (
+        Index('ix_messages_timestamp', timestamp.desc()),
+    )
 
 # Pool massif géré par l'Event Loop
 engine = create_async_engine(POSTGRES_URL, pool_size=20, max_overflow=10, echo=False)
 AsyncSessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
+_ALEMBIC_INI = Path(__file__).parent / "alembic.ini"
+
+def _upgrade_to_head():
+    command.upgrade(Config(str(_ALEMBIC_INI)), "head")
+
 async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Création rétroactive absolue de l'index B-Tree pour les données préexistantes 
-        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_messages_timestamp ON messages (timestamp DESC);"))
+    # Alembic pilote son propre asyncio.run() (voir migrations/env.py) : on l'exécute
+    # dans un thread séparé pour ne pas entrer en conflit avec la boucle déjà active ici.
+    await asyncio.to_thread(_upgrade_to_head)
 
 async def add_message(role: str, content):
     if not isinstance(content, str):
