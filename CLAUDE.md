@@ -73,3 +73,17 @@ Since services only interact via NATS, when changing a message payload or adding
 1. Update `NATS_TOPICS.md` to keep the contract documented.
 2. Update every publisher and subscriber of that topic — grep across `services/` for the topic string, since there's no shared schema/types package between Rust and Python.
 3. Preserve `correlation_id` propagation; it's what lets the benchmark service and cortex's session tracking reconstruct a request's lifecycle across services.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub Issues on `MiloBonbaril/Aletheia-V3`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

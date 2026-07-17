@@ -1,0 +1,7 @@
+# Embed the debug TUI directly in lobe_frontal instead of a standalone NATS-subscribing service
+
+`lobe_frontal` needed a debug TUI showing exactly what's sent to the LLM, the streamed output, tool-call activity, and a reasoning-effort control. Aletheia's usual pattern is independent services communicating only via NATS (see root `CLAUDE.md`), which would suggest a separate TUI service subscribing to the relevant topics. We embedded the TUI directly in `lobe_frontal/main.py` instead, sharing its existing asyncio loop, because the debug view needs internal state (the exact `messages` array per tool-call iteration) that isn't published to NATS and has no other consumer — adding new topics purely to expose it would be a bigger, more speculative change than embedding.
+
+**Considered options**: standalone TUI service subscribing over NATS — rejected, since it would require inventing a NATS contract for debug-only internal state.
+
+**Consequences**: The TUI's render loop shares a process with `lobe_frontal`'s TTFT-critical inference path, so its rendering must not block that loop. General `logging` output is routed to a file only (not the TUI) to avoid corrupting the Textual display. As part of this same pass, llama.cpp connectivity was made recoverable without killing the process (reconnect keybinding, non-fatal cold start) — but the NATS connection-failure path was deliberately left as-is (still exits `main()`), since this work scoped reconnection specifically to llama.cpp restarts, which are frequent for this project's workflow, unlike NATS restarts.
