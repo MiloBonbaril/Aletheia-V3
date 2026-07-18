@@ -2,6 +2,7 @@ import os
 import re
 import json
 import nats
+import time
 import asyncio
 import logging
 from datetime import datetime
@@ -27,6 +28,7 @@ load_dotenv()
 nc = None
 PUNCTUATION_PATTERN = re.compile(r'([.!?\n]+)')
 INFERENCE_SEMAPHORE = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_INFERENCE", "1")))
+MAX_TOOL_ITERATIONS = 10
 
 # Configuration LLM forcée sur notre interface optimisée
 interface = OpenAIInterface()
@@ -39,11 +41,14 @@ logger.info(asyncio.run(interface.get_model_details(MODEL)))
 prompt_builder = PromptBuilder()
 tui_app = LobeTUI()
 
-async def publish_fragment(sequence: int, text: str, is_last: bool):
-    """Point de passage unique pour lobe.fragment_stream, pour que le panneau de sortie reflète exactement ce qui est publié."""
+async def publish_fragment(sequence: int, text: str, is_last: bool, turn_start: float | None = None):
+    """Point de passage unique pour lobe.fragment_stream, pour que le panneau de sortie reflète exactement ce qui est publié.
+    turn_start (optionnel) permet d'afficher le délai jusqu'au premier fragment du tour."""
     await nc.publish("lobe.fragment_stream", json.dumps({
         "sequence": sequence, "text": text, "is_last": is_last
     }).encode())
+    if sequence == 0 and turn_start is not None:
+        tui_app.append_output(f"⏱ premier fragment à {time.monotonic() - turn_start:.3f}s\n")
     tui_app.append_output(text)
 
 async def save_to_memory(text: str):
@@ -67,9 +72,10 @@ available_functions = {
     "get_from_memory": get_from_memory
 }
 
-async def execute_tool_calls(tool_calls: list, sequence) -> list[dict] | None:
-    """Exécute tous les appels d'outils en PARALLÈLE pour maximiser le débit."""
-    
+async def execute_tool_calls(tool_calls: list, sequence, turn_start: float | None = None) -> list[dict] | None:
+    """Exécute tous les appels d'outils en PARALLÈLE pour maximiser le débit.
+    Affiche aussi nom/arguments/résultat de chaque outil dans le panneau de sortie du TUI."""
+
     async def run_single_tool(tc):
         # Unification du format (dict vs objet natif)
         if isinstance(tc, dict):
@@ -82,7 +88,7 @@ async def execute_tool_calls(tool_calls: list, sequence) -> list[dict] | None:
             tc_id = tc.id
 
         if f_name == "stay_silent":
-            return "SILENT", tc_id, f_name, None
+            return "SILENT", tc_id, f_name, args_str, None
 
         try:
             f_args = json.loads(args_str) if args_str else {}
@@ -90,23 +96,26 @@ async def execute_tool_calls(tool_calls: list, sequence) -> list[dict] | None:
             f_args = {}
 
         if f_name not in available_functions:
-            return "ERROR", tc_id, f_name, f"Unknown tool: {f_name}"
-        
+            return "ERROR", tc_id, f_name, args_str, f"Unknown tool: {f_name}"
+
         logger.info(f"🚀 Lancement de l'outil en arrière-plan: {f_name}")
         res = await available_functions[f_name](**f_args)
-        return "OK", tc_id, f_name, res
+        return "OK", tc_id, f_name, args_str, res
 
     # Lancement simultané de toutes les tâches d'outils
     tasks = [run_single_tool(tc) for tc in tool_calls]
     completed_tasks = await asyncio.gather(*tasks)
 
     results = []
-    for status, tc_id, name, content in completed_tasks:
+    for status, tc_id, name, args_str, content in completed_tasks:
+        display_result = content if status != "SILENT" else "(silence)"
+        tui_app.append_output(f"\n🔧 outil {name}({args_str}) → {display_result}\n")
+
         if status == "SILENT":
             logger.info("🤫 Silence radio activé.")
-            await publish_fragment(sequence, "", True)
+            await publish_fragment(sequence, "", True, turn_start)
             return None
-        
+
         results.append({
             "tool_call_id": tc_id,
             "role": "tool",
@@ -152,6 +161,7 @@ async def main():
     logger.info("👂 Lobe Frontal abonné à hippocampe.context.ready")
 
     async def prompt_handler(msg):
+        turn_start = time.monotonic()
         data = json.loads(msg.data.decode())
         prompt = data.get("prompt", "")
         images = data.get("images", [])
@@ -171,11 +181,11 @@ async def main():
             context_summary = context_data.get("context_summary") or None
         except asyncio.TimeoutError:
             logger.error(f"⏰ Timeout contexte hippocampe (corr={correlation_id[:8]}...), annulation de la génération.")
-            await publish_fragment(0, "Il semblerait que j'ai des trous de mémoire...", True)
+            await publish_fragment(0, "Il semblerait que j'ai des trous de mémoire...", True, turn_start)
             return
         except Exception as e:
             logger.error(f"Erreur attente contexte: {e}")
-            await publish_fragment(0, "Il semblerait que j'ai des trous de mémoire...", True)
+            await publish_fragment(0, "Il semblerait que j'ai des trous de mémoire...", True, turn_start)
             return
         finally:
             pending_contexts.pop(correlation_id, None)
@@ -197,7 +207,7 @@ async def main():
             overall_response_fragments = []
             turn_count = 0
 
-            while turn_count < 10:
+            while turn_count < MAX_TOOL_ITERATIONS:
                 turn_count += 1
                 try:
                     stream = await interface.get_stream(messages, MODEL, prompt_builder.tools_schema, TEMPERATURE, TOP_P, REASONING_EFFORT)
@@ -228,7 +238,7 @@ async def main():
                                 text_buffer = text_buffer[end_idx:] # On purge uniquement ce qui est envoyé
                                 
                                 if fragment:
-                                    await publish_fragment(sequence, fragment, False)
+                                    await publish_fragment(sequence, fragment, False, turn_start)
                                     sequence += 1
 
                         # Agrégation des chunks d'outils (Streaming de l'appel d'outil)
@@ -259,15 +269,17 @@ async def main():
                             del tc["function"]["args_buffer"]
                     
                     tool_calls = list(tool_calls_dict.values())
-                    
+
+                    tui_app.append_output(f"\n── Tour {turn_count}/{MAX_TOOL_ITERATIONS} · finish_reason={finish_reason} ──\n")
+
                     if tool_calls and finish_reason == "tool_calls":
                         messages.append({
                             "role": "assistant",
                             "content": collected_content or None,
                             "tool_calls": tool_calls
                         })
-                        
-                        results = await execute_tool_calls(tool_calls, sequence)
+
+                        results = await execute_tool_calls(tool_calls, sequence, turn_start)
                         if results is None: return # stay silent
 
                         messages.extend(results)
@@ -277,18 +289,18 @@ async def main():
                         for r in results:
                             if r["name"] == "get_from_memory":
                                 asyncio.create_task(nc.publish("hippocampe.history.add", json.dumps({"role": "tool", "content": r["content"]}).encode()))
-                        
+
                         finish_reason = None
                         continue
                     else:
                         # Flush final du buffer glissant s'il reste du texte
                         final_text = text_buffer.strip()
-                        await publish_fragment(sequence, final_text, True)
+                        await publish_fragment(sequence, final_text, True, turn_start)
                         break
 
                 except Exception as e:
                     logger.exception(f"Erreur boucle génération: {e}")
-                    await publish_fragment(sequence, "Erreur.", True)
+                    await publish_fragment(sequence, "Erreur.", True, turn_start)
                     break
 
             # Enregistrement final asynchrone
