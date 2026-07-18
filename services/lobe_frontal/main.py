@@ -35,12 +35,13 @@ MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 TEMPERATURE = float(os.getenv("TEMPERATURE", 0.9))
 TOP_P = float(os.getenv("TOP_P", 0.95))
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "default")
-MODEL_DETAILS = asyncio.run(interface.get_model_details(MODEL))
-logger.info(MODEL_DETAILS)
 
 prompt_builder = PromptBuilder()
 tui_app = LobeTUI()
-tui_app.set_effort_options(MODEL_DETAILS["supported_reasoning_efforts"], REASONING_EFFORT)
+# ponytail : pas de fetch de modèle ici (l'ancien MODEL_DETAILS = asyncio.run(...) faisait
+# double emploi avec refresh_inference_connection(), appelée juste après dans main() —
+# get_models()/get_model_details() ne sont donc appelés qu'une fois, au bon endroit, non-fatal.
+tui_app.current_effort = REASONING_EFFORT
 
 class TUIAlertHandler(logging.Handler):
     """Fait remonter WARNING+ (tous modules, via propagation sur 'LobeFrontal') vers le
@@ -50,6 +51,26 @@ class TUIAlertHandler(logging.Handler):
         tui_app.alert(self.format(record), severity)
 
 logger.addHandler(TUIAlertHandler(level=logging.WARNING))
+
+async def refresh_inference_connection():
+    """Ré-exécute les mêmes appels de découverte de modèle qu'au démarrage (get_models +
+    get_model_details), sans reconstruire le client OpenAI — pour un cold start où
+    llama.cpp n'était pas encore prêt, ou un redémarrage de llama.cpp en cours de session
+    (voir docs/adr/0001-embedded-tui-in-lobe-frontal.md). Câblée sur tui_app.on_reconnect
+    ('r') et appelée une première fois dans main().
+    Seul get_models() a besoin d'un try/except : get_model_details() avale déjà ses
+    propres erreurs I/O en interne (voir OpenAI/interface.py) et ne lève jamais."""
+    try:
+        models = await interface.get_models()
+        logger.info(f"✅ Connecté au serveur d'inférence! Modèles disponibles: {models}")
+    except Exception as e:
+        logger.error(f"Erreur lors de la connexion au serveur d'inférence: {e}")
+        tui_app.set_disconnected(str(e))
+        return
+    model_details = await interface.get_model_details(MODEL)
+    tui_app.set_effort_options(model_details["supported_reasoning_efforts"], tui_app.current_effort)
+
+tui_app.on_reconnect = refresh_inference_connection
 
 async def publish_fragment(sequence: int, text: str, is_last: bool, turn_start: float | None = None):
     """Point de passage unique pour lobe.fragment_stream, pour que le panneau de sortie reflète exactement ce qui est publié.
@@ -145,12 +166,9 @@ async def main():
         return
     logger.info("✅ Connecté à NATS.")
     logger.info("Connection au serveur d'inférence...")
-    try:
-        models = await interface.get_models()
-        logger.info(f"✅ Connecté au serveur d'inférence! Modèles disponibles: {models}")
-    except Exception as e:
-        logger.error(f"Erreur lors de la connexion au serveur d'inférence: {e}")
-        raise Exception("Erreur lors de la connexion au serveur d'inférence")
+    # Non-fatal : un échec ici (llama.cpp pas encore prêt) ne tue plus le process, la TUI
+    # démarre quand même en état déconnecté visible (cf. ticket #8) ; 'r' relance ce même appel.
+    await refresh_inference_connection()
 
     # ── Attente passive du contexte hippocampe ──
     pending_contexts: dict[str, asyncio.Future] = {}
