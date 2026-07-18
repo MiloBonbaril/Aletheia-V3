@@ -149,6 +149,10 @@ class OpenAIInterface:
 
     async def get_stream(self, messages: list, model, tools, temperature, top_p, reasoning_effort):
         logger.info("Envoi immédiat de la requête LLM...")
+        # reasoning_effort est ignoré par llama.cpp (vérifié en direct) ; le
+        # vrai interrupteur pour ce backend est chat_template_kwargs.enable_thinking,
+        # qu'on dérive donc nous-mêmes de reasoning_effort.
+        enable_thinking = str(reasoning_effort).strip().lower() != "none"
         return await self.openai_client.chat.completions.create(
             messages=messages,
             model=model,
@@ -156,7 +160,8 @@ class OpenAIInterface:
             stream=True,
             temperature=temperature,
             top_p=top_p,
-            reasoning_effort=reasoning_effort
+            reasoning_effort=reasoning_effort,
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
         )
 
 
