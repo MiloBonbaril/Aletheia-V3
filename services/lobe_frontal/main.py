@@ -9,13 +9,18 @@ from datetime import datetime
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    # ponytail: fichier plutôt que stdout/stderr pour ne pas corrompre le rendu
+    # Textual du TUI (main.py). Le ticket #6 fera le vrai découpage (routage
+    # par module + toasts/status-bar in-TUI) ; ceci n'est que le strict
+    # nécessaire pour que le TUI de la ticket #4 reste utilisable.
+    handlers=[logging.FileHandler(os.path.join(os.path.dirname(__file__), "lobe_frontal.log"))]
 )
 logger = logging.getLogger("LobeFrontal")
 
 from dotenv import load_dotenv
 from OpenAI.interface import OpenAIInterface
 from src.prompt_builder import PromptBuilder
+from tui import LobeTUI
 
 load_dotenv()
 
@@ -32,6 +37,14 @@ REASONING_EFFORT = os.getenv("REASONING_EFFORT", "default")
 logger.info(asyncio.run(interface.get_model_details(MODEL)))
 
 prompt_builder = PromptBuilder()
+tui_app = LobeTUI()
+
+async def publish_fragment(sequence: int, text: str, is_last: bool):
+    """Point de passage unique pour lobe.fragment_stream, pour que le panneau de sortie reflète exactement ce qui est publié."""
+    await nc.publish("lobe.fragment_stream", json.dumps({
+        "sequence": sequence, "text": text, "is_last": is_last
+    }).encode())
+    tui_app.append_output(text)
 
 async def save_to_memory(text: str):
     try:
@@ -91,7 +104,7 @@ async def execute_tool_calls(tool_calls: list, sequence) -> list[dict] | None:
     for status, tc_id, name, content in completed_tasks:
         if status == "SILENT":
             logger.info("🤫 Silence radio activé.")
-            await nc.publish("lobe.fragment_stream", json.dumps({"sequence": sequence, "text": "", "is_last": True}).encode())
+            await publish_fragment(sequence, "", True)
             return None
         
         results.append({
@@ -158,24 +171,20 @@ async def main():
             context_summary = context_data.get("context_summary") or None
         except asyncio.TimeoutError:
             logger.error(f"⏰ Timeout contexte hippocampe (corr={correlation_id[:8]}...), annulation de la génération.")
-            await nc.publish("lobe.fragment_stream", json.dumps({
-                "sequence": 0,
-                "text": "Il semblerait que j'ai des trous de mémoire...",
-                "is_last": True
-            }).encode())
+            await publish_fragment(0, "Il semblerait que j'ai des trous de mémoire...", True)
             return
         except Exception as e:
             logger.error(f"Erreur attente contexte: {e}")
-            await nc.publish("lobe.fragment_stream", json.dumps({
-                "sequence": 0,
-                "text": "Il semblerait que j'ai des trous de mémoire...",
-                "is_last": True
-            }).encode())
+            await publish_fragment(0, "Il semblerait que j'ai des trous de mémoire...", True)
             return
         finally:
             pending_contexts.pop(correlation_id, None)
 
         messages = prompt_builder.build(prompt, images, audio, history, context_summary, rag_results)
+        # Différé via call_soon (même thread/boucle) : le JSON dump + TextArea.load_text
+        # peuvent être coûteux avec des images/audio en base64, et ne doivent pas
+        # retarder l'appel à get_stream() qui suit (chemin critique du TTFT).
+        loop.call_soon(tui_app.update_messages, messages)
 
         # Log asynchrone du prompt utilisateur en tâche de fond
         asyncio.create_task(nc.publish(
@@ -219,9 +228,7 @@ async def main():
                                 text_buffer = text_buffer[end_idx:] # On purge uniquement ce qui est envoyé
                                 
                                 if fragment:
-                                    await nc.publish("lobe.fragment_stream", json.dumps({
-                                        "sequence": sequence, "text": fragment, "is_last": False
-                                    }).encode())
+                                    await publish_fragment(sequence, fragment, False)
                                     sequence += 1
 
                         # Agrégation des chunks d'outils (Streaming de l'appel d'outil)
@@ -262,9 +269,10 @@ async def main():
                         
                         results = await execute_tool_calls(tool_calls, sequence)
                         if results is None: return # stay silent
-                        
+
                         messages.extend(results)
-                        
+                        loop.call_soon(tui_app.update_messages, messages)
+
                         # Historisation asynchrone en tâche de fond pour ne pas bloquer le tour de boucle
                         for r in results:
                             if r["name"] == "get_from_memory":
@@ -275,16 +283,12 @@ async def main():
                     else:
                         # Flush final du buffer glissant s'il reste du texte
                         final_text = text_buffer.strip()
-                        await nc.publish("lobe.fragment_stream", json.dumps({
-                            "sequence": sequence, 
-                            "text": final_text, 
-                            "is_last": True
-                        }).encode())
+                        await publish_fragment(sequence, final_text, True)
                         break
 
                 except Exception as e:
                     logger.exception(f"Erreur boucle génération: {e}")
-                    await nc.publish("lobe.fragment_stream", json.dumps({"sequence": sequence, "text": "Erreur.", "is_last": True}).encode())
+                    await publish_fragment(sequence, "Erreur.", True)
                     break
 
             # Enregistrement final asynchrone
@@ -295,7 +299,9 @@ async def main():
 
     await nc.subscribe("cortex.prompt", queue="lobe_workers", cb=prompt_handler)
     logger.info("👂 Lobe Frontal prêt à foudroyer le TTFT.")
-    while True: await asyncio.sleep(1)
+    # Le TUI partage cette même boucle asyncio (docs/adr/0001) : les callbacks NATS
+    # ci-dessus continuent de se déclencher normalement pendant que run_async() tourne.
+    await tui_app.run_async()
 
 if __name__ == '__main__':
     try: asyncio.run(main())
