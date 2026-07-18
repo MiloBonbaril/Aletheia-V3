@@ -35,10 +35,12 @@ MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 TEMPERATURE = float(os.getenv("TEMPERATURE", 0.9))
 TOP_P = float(os.getenv("TOP_P", 0.95))
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "default")
-logger.info(asyncio.run(interface.get_model_details(MODEL)))
+MODEL_DETAILS = asyncio.run(interface.get_model_details(MODEL))
+logger.info(MODEL_DETAILS)
 
 prompt_builder = PromptBuilder()
 tui_app = LobeTUI()
+tui_app.set_effort_options(MODEL_DETAILS["supported_reasoning_efforts"], REASONING_EFFORT)
 
 class TUIAlertHandler(logging.Handler):
     """Fait remonter WARNING+ (tous modules, via propagation sur 'LobeFrontal') vers le
@@ -218,7 +220,7 @@ async def main():
             while turn_count < MAX_TOOL_ITERATIONS:
                 turn_count += 1
                 try:
-                    stream = await interface.get_stream(messages, MODEL, prompt_builder.tools_schema, TEMPERATURE, TOP_P, REASONING_EFFORT)
+                    stream = await interface.get_stream(messages, MODEL, prompt_builder.tools_schema, TEMPERATURE, TOP_P, tui_app.current_effort)
                     
                     tool_calls_dict = {}
                     collected_content = ""
