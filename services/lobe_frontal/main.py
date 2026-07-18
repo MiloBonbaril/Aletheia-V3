@@ -8,12 +8,11 @@ import logging
 from datetime import datetime
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     # ponytail: fichier plutôt que stdout/stderr pour ne pas corrompre le rendu
-    # Textual du TUI (main.py). Le ticket #6 fera le vrai découpage (routage
-    # par module + toasts/status-bar in-TUI) ; ceci n'est que le strict
-    # nécessaire pour que le TUI de la ticket #4 reste utilisable.
+    # Textual du TUI. Le routage WARNING+ vers le TUI (toast + barre de statut)
+    # se fait via TUIAlertHandler, attaché après la création de tui_app.
     handlers=[logging.FileHandler(os.path.join(os.path.dirname(__file__), "lobe_frontal.log"))]
 )
 logger = logging.getLogger("LobeFrontal")
@@ -40,6 +39,15 @@ logger.info(asyncio.run(interface.get_model_details(MODEL)))
 
 prompt_builder = PromptBuilder()
 tui_app = LobeTUI()
+
+class TUIAlertHandler(logging.Handler):
+    """Fait remonter WARNING+ (tous modules, via propagation sur 'LobeFrontal') vers le
+    toast + la barre de statut du TUI ; le FileHandler racine reste seul responsable du fichier."""
+    def emit(self, record: logging.LogRecord) -> None:
+        severity = "error" if record.levelno >= logging.ERROR else "warning"
+        tui_app.alert(self.format(record), severity)
+
+logger.addHandler(TUIAlertHandler(level=logging.WARNING))
 
 async def publish_fragment(sequence: int, text: str, is_last: bool, turn_start: float | None = None):
     """Point de passage unique pour lobe.fragment_stream, pour que le panneau de sortie reflète exactement ce qui est publié.
