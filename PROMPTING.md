@@ -27,6 +27,12 @@ Le prompt système est encapsulé dans une balise `<system>` et divisé en secti
     </tool>
   </tools>
 
+  <mood>
+    <!-- Humeur courante d'Aletheia, injectée dynamiquement depuis le dernier état
+         rediffusé par le service limbic (limbic.mood.update). Absente tant qu'aucun
+         mood n'a encore été fixé (ex: limbic pas encore démarré). -->
+  </mood>
+
   <recall>
     <!-- Souvenirs pertinents rappelés automatiquement par le RAG passif.
          Cette section est injectée dynamiquement avant chaque inférence
@@ -48,8 +54,11 @@ Le système utilise le Function Calling pour interagir avec le monde extérieur 
 | `get_from_memory` | Recherche RAG active | Pour des recherches ciblées et complexes que le rappel automatique (`<recall>`) n'aurait pas couvert. |
 | `save_to_memory` | Stockage RAG | Lorsqu'une information nouvelle et importante est apprise, ou lors de l'utilisation de l'emoji `peponotes`. |
 | `stay_silent` | Contrôle de flux | Pour ignorer un utilisateur ou répondre à une demande de silence. Ne génère aucun texte. |
+| `set_mood` | Humeur | Lorsqu'une émotion forte anime Aletheia (joie, tristesse, colère, taquinerie...). Prend `emotion`, `intensity` (0-1) et une `description` libre optionnelle. |
 
 > **Note :** Les souvenirs pertinents sont désormais **automatiquement rappelés** via le RAG passif et injectés dans la section `<recall>` du prompt. Le tool `get_from_memory` reste disponible comme complément pour des requêtes complexes.
+
+> **Note :** `set_mood` ne fait que publier l'intention sur `limbic.mood.set` (fire-and-forget) — le service `limbic` reste seul responsable d'appliquer et de rediffuser l'état canonique via `limbic.mood.update`. Le Lobe Frontal se contente de mettre en cache la dernière valeur reçue et de l'injecter dans `<mood>` au tour suivant ; il ne modifie jamais l'humeur localement.
 
 ## 📄 Fichiers de Configuration
 
