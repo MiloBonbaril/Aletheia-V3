@@ -98,9 +98,20 @@ async def get_from_memory(prompt: str):
         logger.error(f"Erreur get_from_memory: {e}")
         return ""
 
+async def set_mood(emotion: str, intensity: float, description: str | None = None):
+    # Fire-and-forget : limbic est seul responsable d'appliquer/rediffuser l'état (cf. docs/adr).
+    try:
+        payload = {"emotion": emotion, "intensity": intensity, "description": description}
+        await nc.publish("limbic.mood.set", json.dumps(payload).encode())
+        return "Mood updated."
+    except Exception as e:
+        logger.error(f"Erreur set_mood: {e}")
+        return ""
+
 available_functions = {
     "save_to_memory": save_to_memory,
-    "get_from_memory": get_from_memory
+    "get_from_memory": get_from_memory,
+    "set_mood": set_mood
 }
 
 async def execute_tool_calls(tool_calls: list, sequence, turn_start: float | None = None) -> list[dict] | None:
@@ -187,6 +198,17 @@ async def main():
 
     await nc.subscribe("hippocampe.context.ready", cb=context_ready_handler)
     logger.info("👂 Lobe Frontal abonné à hippocampe.context.ready")
+
+    async def mood_update_handler(msg):
+        """Met en cache le mood canonique rediffusé par limbic (cf. #10) pour le prochain prompt."""
+        try:
+            prompt_builder.mood = json.loads(msg.data.decode())
+            logger.info(f"🎭 Mood mis à jour: {prompt_builder.mood.get('emotion')} ({prompt_builder.mood.get('intensity')})")
+        except Exception as e:
+            logger.error(f"Erreur parsing mood.update: {e}")
+
+    await nc.subscribe("limbic.mood.update", cb=mood_update_handler)
+    logger.info("👂 Lobe Frontal abonné à limbic.mood.update")
 
     async def prompt_handler(msg):
         turn_start = time.monotonic()
