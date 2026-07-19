@@ -138,6 +138,32 @@ Ajout d'un souvenir dans la mémoire RAG (utilisé par le tool `save_to_memory` 
 
 ---
 
+### 🎭 Envies & Humeur (Limbic)
+
+#### `limbic.mood.set`
+Demande de changement d'humeur (fire-and-forget). Remplace intégralement l'état courant.
+- **Payload (JSON) :**
+  ```json
+  {
+    "emotion": "taquine",
+    "intensity": 0.7,
+    "description": "un peu moqueuse, sourire en coin (optionnel)"
+  }
+  ```
+
+#### `limbic.mood.update`
+État d'humeur canonique rediffusé par `limbic` à chaque changement (set ou décroissance périodique vers la baseline neutre).
+- **Payload (JSON) :**
+  ```json
+  {
+    "emotion": "taquine",
+    "intensity": 0.7,
+    "description": "un peu moqueuse, sourire en coin (optionnel)"
+  }
+  ```
+
+---
+
 ### 🔊 Sorties & Actions (Egress)
 
 #### `io.voice.tts` (Prévu)
