@@ -147,6 +147,18 @@ class OpenAIInterface:
 
         return details
 
+    async def get_completion(self, messages: list, model, temperature, top_p) -> str:
+        """Appel non-streaming, sans tools, pour une réflexion silencieuse ponctuelle
+        (ex: lobe.topic.generate, #15) — jamais lié à lobe.fragment_stream."""
+        response = await self.openai_client.chat.completions.create(
+            messages=messages,
+            model=model,
+            stream=False,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return (response.choices[0].message.content or "").strip()
+
     async def get_stream(self, messages: list, model, tools, temperature, top_p, reasoning_effort):
         logger.info("Envoi immédiat de la requête LLM...")
         # reasoning_effort est ignoré par llama.cpp (vérifié en direct) ; le

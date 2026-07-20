@@ -18,6 +18,8 @@ BOREDOM_INCREMENT_RATE = float(os.getenv("BOREDOM_INCREMENT_RATE", "0.01"))
 BOREDOM_THRESHOLD = float(os.getenv("BOREDOM_THRESHOLD", "1.0"))
 PROACTIVE_GATE_START_HOUR = int(os.getenv("PROACTIVE_GATE_START_HOUR", "9"))
 PROACTIVE_GATE_END_HOUR = int(os.getenv("PROACTIVE_GATE_END_HOUR", "23"))
+# ponytail: constante plutôt qu'un .env — pas un comportement à accorder, juste un garde-fou.
+TOPIC_GENERATE_TIMEOUT_SECONDS = 30.0
 
 
 async def main():
@@ -95,12 +97,19 @@ async def main():
                 boredom_state.boredom, BOREDOM_THRESHOLD, presence_occupied,
                 datetime.now().hour, PROACTIVE_GATE_START_HOUR, PROACTIVE_GATE_END_HOUR,
             ):
+                topic = PLACEHOLDER_TOPIC
+                try:
+                    reply = await nc.request("lobe.topic.generate", b"{}", timeout=TOPIC_GENERATE_TIMEOUT_SECONDS)
+                    topic = json.loads(reply.data.decode()).get("topic") or PLACEHOLDER_TOPIC
+                except Exception as e:
+                    print(f"[Limbic] ⚠️ lobe.topic.generate indisponible ({e}), fallback sur le placeholder.")
+
                 await nc.publish("limbic.proactive.trigger", json.dumps({
-                    "prompt": PLACEHOLDER_TOPIC,
+                    "prompt": topic,
                     "source": "proactive",
                 }).encode())
                 boredom_state = boredom_reset(boredom_state)
-                print("[Limbic] 🗣️ Déclenchement proactif (boredom -> 0).")
+                print(f"[Limbic] 🗣️ Déclenchement proactif (boredom -> 0) : {topic}")
     except KeyboardInterrupt:
         print("Arrêt du Limbic...")
     finally:
