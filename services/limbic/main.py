@@ -20,7 +20,7 @@ PROACTIVE_GATE_START_HOUR = int(os.getenv("PROACTIVE_GATE_START_HOUR", "9"))
 PROACTIVE_GATE_END_HOUR = int(os.getenv("PROACTIVE_GATE_END_HOUR", "23"))
 # ponytail: constante plutôt qu'un .env — pas un comportement à accorder, juste un garde-fou.
 TOPIC_GENERATE_TIMEOUT_SECONDS = 30.0
-
+TOPIC_PREFIX = "Système: Tu t'ennuies, lance une conversation sur le sujet suivant sachant que c'est toi qui a initié le sujet : "
 
 async def main():
     print("🎭 Démarrage du service Limbic...")
@@ -100,7 +100,11 @@ async def main():
                 topic = PLACEHOLDER_TOPIC
                 try:
                     reply = await nc.request("lobe.topic.generate", b"{}", timeout=TOPIC_GENERATE_TIMEOUT_SECONDS)
-                    topic = json.loads(reply.data.decode()).get("topic") or PLACEHOLDER_TOPIC
+                    topic = json.loads(reply.data.decode()).get("topic")
+                    if topic:
+                        topic = TOPIC_PREFIX + str(topic)
+                    else:
+                        topic = PLACEHOLDER_TOPIC
                 except Exception as e:
                     print(f"[Limbic] ⚠️ lobe.topic.generate indisponible ({e}), fallback sur le placeholder.")
 
