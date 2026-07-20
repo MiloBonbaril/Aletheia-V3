@@ -127,6 +127,21 @@ class PromptBuilder:
         sections.append("\n</system>")
         return "\n".join(sections)
 
+    def build_topic_prompt(self) -> list[dict]:
+        """Prompt minimal pour la réflexion silencieuse de lobe.topic.generate (#15) :
+        persona + core_memory, sans historique/RAG. Jamais publié sur lobe.fragment_stream."""
+        return [
+            {"role": "system", "content": self.build_system_prompt()},
+            {
+                "role": "user",
+                "content": (
+                    "Tu es seule, sans interlocuteur pour l'instant. Quel sujet ou quelle idée "
+                    "as-tu envie d'aborder là, maintenant ? Réponds uniquement par ce sujet, "
+                    "en une phrase courte, sans rien ajouter d'autre."
+                ),
+            },
+        ]
+
     @staticmethod
     def _is_discord_url_expired(url: str, current_time: float) -> bool:
         if not isinstance(url, str) or "cdn.discordapp.com/attachments/" not in url:

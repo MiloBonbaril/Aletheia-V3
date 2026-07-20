@@ -35,5 +35,5 @@ Le comportement de l'IA est piloté par des fichiers Markdown situés dans le do
 *L'édition de ces fichiers modifie le comportement de l'entité sans nécessiter de redémarrage du code.*
 
 ## 🔌 Interface NATS
-- **S'abonne à** : `cortex.prompt`
+- **S'abonne à** : `cortex.prompt`, `lobe.topic.generate` (request-reply, réflexion silencieuse pour la proactivité de `limbic` — voir #15, jamais reliée à `lobe.fragment_stream`)
 - **Publie sur** : `lobe.fragment_stream`

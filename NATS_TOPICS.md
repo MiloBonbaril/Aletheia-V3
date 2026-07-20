@@ -155,7 +155,7 @@ Ajout d'un souvenir dans la mémoire RAG (utilisé par le tool `save_to_memory` 
 ### 🔁 Proactivité (Limbic ↔ Cortex)
 
 #### `limbic.proactive.trigger`
-Déclencheur d'interaction proactive (fire-and-forget), publié par `limbic` quand sa jauge de boredom (`BOREDOM_INCREMENT_RATE`/tick) franchit `BOREDOM_THRESHOLD` **et** que deux gates sont ouvertes : présence (dernier `io.presence.discord_voice` reçu) et horaire (`PROACTIVE_GATE_START_HOUR`-`PROACTIVE_GATE_END_HOUR`). Si un gate est fermé au moment critique, le déclenchement reste en attente (le boredom continue d'accumuler sans jamais redescendre tout seul) et se déclenche dès que les gates s'ouvrent, sans re-franchir le seuil. Le sujet est un placeholder en attendant #15. Traité par le Cortex exactement comme `io.user.msg.text` (même fan-out `cortex.prompt` + `hippocampe.context.build`), avec `source` sur le payload `cortex.prompt` dispatché repris tel quel depuis ce message (ou `"proactive"` par défaut si absent).
+Déclencheur d'interaction proactive (fire-and-forget), publié par `limbic` quand sa jauge de boredom (`BOREDOM_INCREMENT_RATE`/tick) franchit `BOREDOM_THRESHOLD` **et** que deux gates sont ouvertes : présence (dernier `io.presence.discord_voice` reçu) et horaire (`PROACTIVE_GATE_START_HOUR`-`PROACTIVE_GATE_END_HOUR`). Si un gate est fermé au moment critique, le déclenchement reste en attente (le boredom continue d'accumuler sans jamais redescendre tout seul) et se déclenche dès que les gates s'ouvrent, sans re-franchir le seuil. Le sujet est obtenu via `lobe.topic.generate` (voir ci-dessous) juste avant l'envoi de ce message — les gates ne sont donc pas re-vérifiés après cet appel (jusqu'à quelques secondes) : un changement de présence/horaire pendant l'attente n'annule pas un déclenchement déjà décidé. Traité par le Cortex exactement comme `io.user.msg.text` (même fan-out `cortex.prompt` + `hippocampe.context.build`), avec `source` sur le payload `cortex.prompt` dispatché repris tel quel depuis ce message (ou `"proactive"` par défaut si absent).
 
 `limbic` remet aussi son boredom à 0 localement dès l'émission de ce message (en plus du reset via `cortex.interaction.started` ci-dessous) : ça évite de re-déclencher à chaque tick si le Cortex est injoignable et que l'écho n'arrive jamais.
 - **Payload (JSON) :**
@@ -173,6 +173,16 @@ Signal fire-and-forget publié par le Cortex à chaque dispatch d'un événement
   {
     "correlation_id": "uuid-v4",
     "source": "user|proactive"
+  }
+  ```
+
+#### `lobe.topic.generate`
+Requête request-reply publiée par `limbic` juste avant `limbic.proactive.trigger`, pour obtenir un sujet réfléchi par le LLM (persona + core_memory, sans historique/RAG) plutôt que le placeholder de #14. Aucune contrainte de latence (rien d'autre n'attend la réponse). Cet appel n'est **jamais** relié à `lobe.fragment_stream` — c'est une réflexion silencieuse, jamais dite à voix haute ni envoyée à Discord. Si `limbic` n'obtient pas de réponse (timeout ou erreur), il retombe sur `PLACEHOLDER_TOPIC`.
+- **Requête (JSON) :** `{}` (aucun champ nécessaire, le sujet est dérivé de l'état interne du Lobe Frontal).
+- **Réponse (JSON) :**
+  ```json
+  {
+    "topic": "Sujet ou idée que Aletheia a envie d'évoquer"
   }
   ```
 

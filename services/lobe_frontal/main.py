@@ -210,6 +210,22 @@ async def main():
     await nc.subscribe("limbic.mood.update", cb=mood_update_handler)
     logger.info("👂 Lobe Frontal abonné à limbic.mood.update")
 
+    async def topic_generate_handler(msg):
+        """Réflexion silencieuse à la demande de limbic (#15) : jamais publié sur lobe.fragment_stream.
+        Passe par INFERENCE_SEMAPHORE comme prompt_handler : sans ça, une réflexion pourrait tourner
+        en concurrence d'un vrai tour utilisateur sur le même llama.cpp mono-slot — la réflexion n'a
+        aucune contrainte de latence (#15), donc attendre son tour ici ne coûte rien."""
+        try:
+            async with INFERENCE_SEMAPHORE:
+                topic = await interface.get_completion(prompt_builder.build_topic_prompt(), MODEL, TEMPERATURE, TOP_P)
+        except Exception as e:
+            logger.error(f"Erreur lobe.topic.generate: {e}")
+            topic = ""
+        await nc.publish(msg.reply, json.dumps({"topic": topic}).encode())
+
+    await nc.subscribe("lobe.topic.generate", queue="lobe_workers", cb=topic_generate_handler)
+    logger.info("👂 Lobe Frontal abonné à lobe.topic.generate")
+
     async def prompt_handler(msg):
         turn_start = time.monotonic()
         data = json.loads(msg.data.decode())
