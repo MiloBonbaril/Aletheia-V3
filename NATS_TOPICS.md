@@ -155,11 +155,14 @@ Ajout d'un souvenir dans la mémoire RAG (utilisé par le tool `save_to_memory` 
 ### 🔁 Proactivité (Limbic ↔ Cortex)
 
 #### `limbic.proactive.trigger`
-Déclencheur d'interaction proactive (fire-and-forget), publié par `limbic` (implémentation à venir). Traité par le Cortex exactement comme `io.user.msg.text` (même fan-out `cortex.prompt` + `hippocampe.context.build`), avec `source: "proactive"` sur le payload `cortex.prompt` dispatché.
+Déclencheur d'interaction proactive (fire-and-forget), publié par `limbic` quand sa jauge de boredom (`BOREDOM_INCREMENT_RATE`/tick) franchit `BOREDOM_THRESHOLD` **et** que deux gates sont ouvertes : présence (dernier `io.presence.discord_voice` reçu) et horaire (`PROACTIVE_GATE_START_HOUR`-`PROACTIVE_GATE_END_HOUR`). Si un gate est fermé au moment critique, le déclenchement reste en attente (le boredom continue d'accumuler sans jamais redescendre tout seul) et se déclenche dès que les gates s'ouvrent, sans re-franchir le seuil. Le sujet est un placeholder en attendant #15. Traité par le Cortex exactement comme `io.user.msg.text` (même fan-out `cortex.prompt` + `hippocampe.context.build`), avec `source` sur le payload `cortex.prompt` dispatché repris tel quel depuis ce message (ou `"proactive"` par défaut si absent).
+
+`limbic` remet aussi son boredom à 0 localement dès l'émission de ce message (en plus du reset via `cortex.interaction.started` ci-dessous) : ça évite de re-déclencher à chaque tick si le Cortex est injoignable et que l'écho n'arrive jamais.
 - **Payload (JSON) :**
   ```json
   {
-    "prompt": "Sujet ou amorce de conversation à évoquer"
+    "prompt": "Sujet ou amorce de conversation à évoquer",
+    "source": "proactive"
   }
   ```
 
