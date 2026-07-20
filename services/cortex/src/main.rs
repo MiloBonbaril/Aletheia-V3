@@ -17,6 +17,14 @@ struct PromptPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     audio: Option<String>,
     correlation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+#[derive(Serialize)]
+struct InteractionStartedPayload {
+    correlation_id: String,
+    source: String,
 }
 
 #[derive(Serialize)]
@@ -41,6 +49,32 @@ struct UserMsgPayload {
     images: Vec<String>,
 }
 
+#[derive(Deserialize, Debug)]
+struct ProactiveTriggerPayload {
+    prompt: String,
+}
+
+/// Étiquette de traçabilité pour `cortex.interaction.started` : "proactive" si le
+/// dispatch vient de `limbic.proactive.trigger`, "user" pour toute autre origine.
+fn interaction_source_label(source: &Option<String>) -> String {
+    source.clone().unwrap_or_else(|| "user".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proactive_source_is_kept_as_is() {
+        assert_eq!(interaction_source_label(&Some("proactive".to_string())), "proactive");
+    }
+
+    #[test]
+    fn absent_source_defaults_to_user() {
+        assert_eq!(interaction_source_label(&None), "user");
+    }
+}
+
 // --- Internal Architectural Contracts (The Blueprint) ---
 
 #[derive(Debug, Clone)]
@@ -53,7 +87,7 @@ pub struct EventEnvelope {
 
 #[derive(Debug, Clone)]
 pub enum EventPayload {
-    PromptInbound { text: String, images: Vec<String>, audio: Option<String> },
+    PromptInbound { text: String, images: Vec<String>, audio: Option<String>, source: Option<String> },
     LobeFragment { sequence: usize, text: String, is_last: bool },
     FatalSystemError(String),
 }
@@ -123,9 +157,9 @@ async fn run_dispatcher_worker(
         let _guard = span.enter();
 
         match event.payload {
-            EventPayload::PromptInbound { text, images, audio } => {
-                info!("📥 Routing inbound prompt (length: {}, images: {}, has_audio: {})", text.len(), images.len(), audio.is_some());
-                
+            EventPayload::PromptInbound { text, images, audio, source } => {
+                info!("📥 Routing inbound prompt (length: {}, images: {}, has_audio: {}, source: {:?})", text.len(), images.len(), audio.is_some(), source);
+
                 // Track session start
                 active_sessions.insert(event.session_id.clone(), SessionContext {
                     start_time: event.timestamp_ms,
@@ -139,6 +173,7 @@ async fn run_dispatcher_worker(
                     images,
                     audio,
                     correlation_id: corr_id.clone(),
+                    source: source.clone(),
                 };
 
                 let context_msg = ContextBuildPayload {
@@ -160,6 +195,20 @@ async fn run_dispatcher_worker(
                         if let Err(e) = r1 { error!("⚠️ Failed to emit to Lobe Frontal: {}", e); }
                         if let Err(e) = r2 { error!("⚠️ Failed to emit to Hippocampe: {}", e); }
                         info!("📤 Prompt + Context build dispatched in parallel.");
+
+                        // Signal léger : une interaction démarre, quelle que soit son origine.
+                        let interaction_msg = InteractionStartedPayload {
+                            correlation_id: event.correlation_id.to_string(),
+                            source: interaction_source_label(&source),
+                        };
+                        match serde_json::to_vec(&interaction_msg) {
+                            Ok(ib) => {
+                                if let Err(e) = nats.publish("cortex.interaction.started", ib.into()).await {
+                                    error!("⚠️ Failed to emit cortex.interaction.started: {}", e);
+                                }
+                            }
+                            Err(e) => error!("⚠️ Serialization error (interaction.started): {}", e),
+                        }
                     }
                     (Err(e), _) | (_, Err(e)) => {
                         error!("⚠️ Serialization error: {}", e);
@@ -241,7 +290,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             dispatcher_io.process_envelope(
                 corr_id,
                 &session_id,
-                EventPayload::PromptInbound { text: prompt_text, images, audio: None }
+                EventPayload::PromptInbound { text: prompt_text, images, audio: None, source: None }
+            ).await;
+        }
+    });
+
+    // 5a. Ingestion Déclencheur Proactif (Limbic) -> Dispatcher
+    let mut proactive_subscriber = nats_client.subscribe("limbic.proactive.trigger").await?;
+    let dispatcher_proactive = dispatcher.clone();
+    let _proactive_handle = tokio::spawn(async move {
+        info!("👂 Cortex Ingress Listening on 'limbic.proactive.trigger'...");
+        while let Some(msg) = proactive_subscriber.next().await {
+            let prompt_text = if let Ok(payload) = serde_json::from_slice::<ProactiveTriggerPayload>(&msg.payload) {
+                payload.prompt
+            } else if let Ok(text_slice) = std::str::from_utf8(&msg.payload) {
+                text_slice.to_string()
+            } else {
+                warn!("⚠️ Ingression Error: Unsupported proactive trigger format.");
+                continue;
+            };
+
+            let corr_id = Uuid::new_v4();
+            let session_id = "global_session".to_string();
+
+            dispatcher_proactive.process_envelope(
+                corr_id,
+                &session_id,
+                EventPayload::PromptInbound {
+                    text: prompt_text,
+                    images: vec![],
+                    audio: None,
+                    source: Some("proactive".to_string()),
+                }
             ).await;
         }
     });
@@ -270,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         text: "".to_string(),
                         images: vec![],
                         audio: Some(payload.audio),
+                        source: None,
                     }
                 ).await;
             } else {

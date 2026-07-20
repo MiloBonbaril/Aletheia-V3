@@ -67,7 +67,8 @@ L'ordre d'inférence envoyé par le Cortex au Lobe Frontal. Inclut un `correlati
     "prompt": "Texte brut du prompt final",
     "images": [],
     "audio": "base64... (optionnel)",
-    "correlation_id": "uuid-v4"
+    "correlation_id": "uuid-v4",
+    "source": "proactive (optionnel, absent si origine utilisateur)"
   }
   ```
 
@@ -146,6 +147,29 @@ Ajout d'un souvenir dans la mémoire RAG (utilisé par le tool `save_to_memory` 
   ```json
   {
     "result": "Successfully saved: ..."
+  }
+  ```
+
+---
+
+### 🔁 Proactivité (Limbic ↔ Cortex)
+
+#### `limbic.proactive.trigger`
+Déclencheur d'interaction proactive (fire-and-forget), publié par `limbic` (implémentation à venir). Traité par le Cortex exactement comme `io.user.msg.text` (même fan-out `cortex.prompt` + `hippocampe.context.build`), avec `source: "proactive"` sur le payload `cortex.prompt` dispatché.
+- **Payload (JSON) :**
+  ```json
+  {
+    "prompt": "Sujet ou amorce de conversation à évoquer"
+  }
+  ```
+
+#### `cortex.interaction.started`
+Signal fire-and-forget publié par le Cortex à chaque dispatch d'un événement d'ingress (`io.user.msg.text`, `io.user.speak.raw`, `limbic.proactive.trigger`, ...), quelle que soit son origine.
+- **Payload (JSON) :**
+  ```json
+  {
+    "correlation_id": "uuid-v4",
+    "source": "user|proactive"
   }
   ```
 
