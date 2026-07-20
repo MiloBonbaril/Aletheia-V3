@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 
 # Fallback si lobe.topic.generate est indisponible/timeout (#15) — le sujet nominal
 # est réfléchi par le LLM via cet appel request-reply.
-PLACEHOLDER_TOPIC = "Lance une conversation sur un sujet qui te passe par la tête."
+PLACEHOLDER_TOPIC = "Système: Tu t'ennuies, lance une conversation sur un sujet qui te passe par la tête."
 
 
 @dataclass(frozen=True)
