@@ -6,6 +6,7 @@ Ce service implémente un bot Discord servant de passerelle de communication ent
 
 - **Ingestion de Messages** : Écoute les messages sur les serveurs Discord et les publie sur le topic NATS `io.user.msg.text` pour qu'ils soient traités par le Cortex.
 - **Diffusion des Réponses** : S'abonne au flux `lobe.fragment_stream` pour renvoyer les réponses de l'IA en temps réel sur le canal Discord.
+- **Présence Vocale** : Publie `io.presence.discord_voice` à chaque changement d'occupation des salons vocaux, pour que d'autres services puissent conditionner leur comportement à la présence d'un public.
 - **Interface Utilisateur** : Permet une interaction asynchrone avec l'entité sans nécessiter d'interface locale.
 
 ## ⚙️ Configuration & Lancement
@@ -24,5 +25,10 @@ python bot.py
 ```
 
 ## 🔌 Interface NATS
-- **Publie sur** : `io.user.msg.text`
+- **Publie sur** : `io.user.msg.text`, `io.presence.discord_voice`
 - **S'abonne à** : `lobe.fragment_stream`
+
+## 🧪 Tests
+```bash
+pytest tests/
+```
