@@ -52,6 +52,8 @@ struct UserMsgPayload {
 #[derive(Deserialize, Debug)]
 struct ProactiveTriggerPayload {
     prompt: String,
+    #[serde(default)]
+    source: Option<String>,
 }
 
 /// Étiquette de traçabilité pour `cortex.interaction.started` : "proactive" si le
@@ -301,10 +303,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _proactive_handle = tokio::spawn(async move {
         info!("👂 Cortex Ingress Listening on 'limbic.proactive.trigger'...");
         while let Some(msg) = proactive_subscriber.next().await {
-            let prompt_text = if let Ok(payload) = serde_json::from_slice::<ProactiveTriggerPayload>(&msg.payload) {
-                payload.prompt
+            let (prompt_text, trigger_source) = if let Ok(payload) = serde_json::from_slice::<ProactiveTriggerPayload>(&msg.payload) {
+                (payload.prompt, payload.source)
             } else if let Ok(text_slice) = std::str::from_utf8(&msg.payload) {
-                text_slice.to_string()
+                (text_slice.to_string(), None)
             } else {
                 warn!("⚠️ Ingression Error: Unsupported proactive trigger format.");
                 continue;
@@ -320,7 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     text: prompt_text,
                     images: vec![],
                     audio: None,
-                    source: Some("proactive".to_string()),
+                    source: Some(trigger_source.unwrap_or_else(|| "proactive".to_string())),
                 }
             ).await;
         }
