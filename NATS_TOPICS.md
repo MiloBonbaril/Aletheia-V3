@@ -44,6 +44,19 @@ Ce document définit les contrats de données et les flux de messages circulant 
 
 ---
 
+### 👥 Présence (I/O Discord)
+
+#### `io.presence.discord_voice`
+Signal temps réel (pas de décroissance/TTL) publié par `io_discord` à chaque changement d'occupation d'un salon vocal du serveur configuré (arrivée/départ d'un membre non-bot).
+- **Payload (JSON) :**
+  ```json
+  {
+    "occupied": true
+  }
+  ```
+
+---
+
 ### 🧠 Cognition (Processing)
 
 #### `cortex.prompt`
