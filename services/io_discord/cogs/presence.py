@@ -67,8 +67,9 @@ class Presence(commands.Cog):
                 json.dumps({"occupied": occupied}).encode(),
             )
             self.last_occupied = occupied
+            self.logger.debug(f"Published presence {occupied} to NATS.")
         except Exception as e:
-            self.logger.error(f"Failed to publish to NATS: {e}")
+            self.logger.error(f"Failed to publish presence to NATS: {e}")
 
 
 def setup(bot: commands.Bot) -> None:

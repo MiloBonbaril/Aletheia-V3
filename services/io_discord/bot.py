@@ -37,7 +37,9 @@ intents.messages = True  # Nécessaire pour lire les messages
 intents.message_content = True  # Requis pour lire le contenu des messages (prefix cmds)
 intents.voice_states = True  # Requis pour rejoindre/déplacer en vocal
 
-bot = commands.Bot(command_prefix=Config.COMMAND_PREFIX, intents=intents)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+bot = commands.Bot(command_prefix=Config.COMMAND_PREFIX, intents=intents, loop=loop)
 
 async def load_extensions_and_sync():
     # Chargement des cogs et synchronisation des commandes (slash/hybrides)
