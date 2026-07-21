@@ -40,15 +40,21 @@ class Voice(commands.Cog):
         description="Join the voice channel you're currently in",
     )
     async def voice_join(self, ctx: discord.ApplicationContext) -> None:
+        await ctx.defer()
         if not ctx.author.voice:
             await ctx.respond("You need to be in a voice channel first.")
             return
 
         channel = ctx.author.voice.channel
-        if ctx.voice_client:
-            await ctx.voice_client.move_to(channel)
-        else:
-            await channel.connect()
+        try:
+            if ctx.voice_client:
+                await ctx.voice_client.move_to(channel)
+            else:
+                await channel.connect()
+        except (asyncio.TimeoutError, discord.ClientException) as e:
+            self.logger.error(f"Failed to join {channel.name}: {e}")
+            await ctx.respond(f"Couldn't join {channel.name} — voice connection failed ({e}).")
+            return
         await ctx.respond(f"Joined {channel.name}.")
 
     @voice.command(
@@ -57,6 +63,7 @@ class Voice(commands.Cog):
         description="Leave the current voice channel",
     )
     async def voice_leave(self, ctx: discord.ApplicationContext) -> None:
+        await ctx.defer()
         vc = ctx.voice_client
         if not vc:
             await ctx.respond("Not currently in a voice channel.")
@@ -75,7 +82,7 @@ class Voice(commands.Cog):
         self, ctx: discord.ApplicationContext, duration: int = 10
     ) -> None:
         vc = ctx.voice_client
-        if not vc:
+        if not vc or not vc.is_connected():
             await ctx.respond("Not in a voice channel — use /voice join first.")
             return
         if vc.recording:
