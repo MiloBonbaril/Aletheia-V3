@@ -55,6 +55,21 @@ class Voice(commands.Cog):
             self.logger.error(f"Failed to join {channel.name}: {e}")
             await ctx.respond(f"Couldn't join {channel.name} — voice connection failed ({e}).")
             return
+
+        vc = ctx.voice_client
+        # py-cord's connect() can exhaust its internal retries on the voice
+        # websocket step without raising, leaving a client that looks present
+        # but never finished the handshake — don't trust the lack of exception.
+        if not vc or not vc.is_connected():
+            self.logger.error(f"Voice handshake with {channel.name} never completed.")
+            if vc:
+                await vc.disconnect(force=True)
+            await ctx.respond(
+                f"Joined {channel.name} but the voice link never came up — "
+                "likely a network/route issue to Discord's voice servers. Try again?"
+            )
+            return
+
         await ctx.respond(f"Joined {channel.name}.")
 
     @voice.command(
