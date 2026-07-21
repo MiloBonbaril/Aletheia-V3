@@ -8,6 +8,9 @@ use tracing::{info, error};
 
 use std::path::PathBuf;
 
+mod segmenter;
+use segmenter::{FrameOutcome, VadSegmenter};
+
 #[derive(Serialize)]
 struct TranscriptionEvent {
     text: String,
@@ -208,9 +211,7 @@ async fn main() -> Result<()> {
             None
         };
         
-        let mut speech_buffer: Vec<f32> = Vec::new();
-        let mut is_speaking = false;
-        let mut silence_frames = 0;
+        let mut segmenter = VadSegmenter::new();
         let mut internal_buf = Vec::new();
         let mut vad_buf = Vec::new();
 
@@ -280,24 +281,13 @@ async fn main() -> Result<()> {
                     Ok(prob) => {
                         diag_vad_frames += 1;
                         if prob > diag_max_prob { diag_max_prob = prob; }
-                        if prob > 0.5 {
-                            if !is_speaking {
-                                info!("Speech started (prob: {:.2})", prob);
+                        match segmenter.push_frame(&frame, prob) {
+                            FrameOutcome::SpeechStarted => info!("Speech started (prob: {:.2})", prob),
+                            FrameOutcome::SpeechEnded(segment) => {
+                                info!("Speech ended. Captured {} samples.", segment.len());
+                                tx_speech.blocking_send(segment).unwrap();
                             }
-                            is_speaking = true;
-                            silence_frames = 0;
-                            speech_buffer.extend_from_slice(&frame);
-                        } else {
-                            if is_speaking {
-                                speech_buffer.extend_from_slice(&frame);
-                                silence_frames += 1;
-                                if silence_frames > 20 { // ~600ms of 30ms frames
-                                    info!("Speech ended. Captured {} samples.", speech_buffer.len());
-                                    is_speaking = false;
-                                    tx_speech.blocking_send(speech_buffer.clone()).unwrap();
-                                    speech_buffer.clear();
-                                }
-                            }
+                            FrameOutcome::Speaking | FrameOutcome::Idle => {}
                         }
                     }
                     Err(e) => error!("VAD error: {:?}", e),
