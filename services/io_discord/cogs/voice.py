@@ -45,6 +45,53 @@ class Voice(commands.Cog):
         self.logger.info("Cleaning up Voice cog resources.")
         self.logger.handlers.clear()
 
+    async def _join_vc(self, ctx: discord.ApplicationContext) -> dict:
+        """Join or move to the author's current voice channel."""
+        if not ctx.author.voice or not ctx.author.voice.channel:
+            return {"status": "error", "message": "You need to be in a voice channel first."}
+
+        dest = ctx.author.voice.channel
+        vc = ctx.voice_client
+        try:
+            if vc and vc.is_connected():
+                if vc.channel.id != dest.id:
+                    await vc.move_to(dest)
+            else:
+                # Explicit timeout (shorter than py-cord's 60s default) so a bad
+                # connection fails faster instead of hanging for minutes.
+                vc = await dest.connect(reconnect=True, timeout=30)
+        except IndexError as e:
+            # discord/gateway.py's initial_connection() does `modes[0]` on the
+            # intersection of Discord's offered encryption modes and ours — an
+            # empty intersection raises IndexError here.
+            self.logger.error(f"Voice encryption mode negotiation failed for {dest.name}: {e}")
+            return {
+                "status": "error",
+                "message": (
+                    f"Voice encryption mode negotiation failed for {dest.name} — "
+                    "Discord didn't offer any mode we support."
+                ),
+            }
+        except (asyncio.TimeoutError, discord.ClientException) as e:
+            self.logger.error(f"Failed to join {dest.name}: {e}")
+            return {"status": "error", "message": f"Couldn't join {dest.name} — voice connection failed ({e})."}
+
+        # py-cord's connect() can exhaust its internal retries on the voice
+        # websocket step without raising, leaving a client that looks present
+        # but never finished the handshake — don't trust the lack of exception.
+        if not vc.is_connected():
+            self.logger.error(f"Voice handshake with {dest.name} never completed.")
+            await vc.disconnect(force=True)
+            return {
+                "status": "error",
+                "message": (
+                    f"Joined {dest.name} but the voice link never came up — "
+                    "likely a network/route issue to Discord's voice servers."
+                ),
+            }
+
+        return {"status": "success", "voice_client": vc, "channel": dest}
+
     @voice.command(
         guild_ids=[Config.GUILD_ID],
         name="join",
@@ -52,36 +99,11 @@ class Voice(commands.Cog):
     )
     async def voice_join(self, ctx: discord.ApplicationContext) -> None:
         await ctx.defer()
-        if not ctx.author.voice:
-            await ctx.respond("You need to be in a voice channel first.")
+        result = await self._join_vc(ctx)
+        if result["status"] != "success":
+            await ctx.respond(result["message"])
             return
-
-        channel = ctx.author.voice.channel
-        try:
-            if ctx.voice_client:
-                await ctx.voice_client.move_to(channel)
-            else:
-                await channel.connect()
-        except (asyncio.TimeoutError, discord.ClientException) as e:
-            self.logger.error(f"Failed to join {channel.name}: {e}")
-            await ctx.respond(f"Couldn't join {channel.name} — voice connection failed ({e}).")
-            return
-
-        vc = ctx.voice_client
-        # py-cord's connect() can exhaust its internal retries on the voice
-        # websocket step without raising, leaving a client that looks present
-        # but never finished the handshake — don't trust the lack of exception.
-        if not vc or not vc.is_connected():
-            self.logger.error(f"Voice handshake with {channel.name} never completed.")
-            if vc:
-                await vc.disconnect(force=True)
-            await ctx.respond(
-                f"Joined {channel.name} but the voice link never came up — "
-                "likely a network/route issue to Discord's voice servers. Try again?"
-            )
-            return
-
-        await ctx.respond(f"Joined {channel.name}.")
+        await ctx.respond(f"Joined {result['channel'].name}.")
 
     @voice.command(
         guild_ids=[Config.GUILD_ID],
