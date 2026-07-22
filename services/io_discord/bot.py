@@ -6,9 +6,6 @@ import os
 import logging
 import typing
 import asyncio
-import socket
-
-import aiohttp
 
 # add workspace to sys.path
 import sys
@@ -42,16 +39,10 @@ intents.voice_states = True  # Requis pour rejoindre/déplacer en vocal
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
-# Discord's voice media relays (unlike the Cloudflare-fronted API/gateway) can have
-# broken IPv6 routing on some networks even when IPv6 works fine everywhere else —
-# force IPv4 for all of the bot's traffic (REST, gateway, and voice websocket all
-# share this connector) to sidestep that.
-connector = aiohttp.TCPConnector(family=socket.AF_INET, loop=loop)
 bot = commands.Bot(
     command_prefix=Config.COMMAND_PREFIX,
     intents=intents,
     loop=loop,
-    connector=connector,
 )
 
 async def load_extensions_and_sync():
