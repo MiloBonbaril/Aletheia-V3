@@ -37,7 +37,7 @@ class Presence(commands.Cog):
         except Exception as e:
             self.logger.error(f"Failed to connect to NATS: {e}")
 
-    def cleanup(self) -> None:
+    def cog_unload(self) -> None:
         self.logger.info("Cleaning up Presence cog resources.")
         if self.nc and not self.nc.is_closed:
             self.bot.loop.create_task(self.nc.close())
@@ -72,15 +72,5 @@ class Presence(commands.Cog):
             self.logger.error(f"Failed to publish presence to NATS: {e}")
 
 
-def setup(bot: commands.Bot) -> None:
-    bot.add_cog(Presence(bot))
-
-
-def teardown(bot: commands.Bot) -> None:
-    cog = bot.get_cog("Presence")
-    if cog:
-        cog.cleanup()
-    try:
-        bot.remove_cog("Presence")
-    except Exception as exc:
-        print(f"Error removing cog Presence: {exc}")
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(Presence(bot))

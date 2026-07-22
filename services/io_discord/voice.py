@@ -1,9 +1,29 @@
 """Cœur pur de la logique d'enregistrement vocal (sans I/O Discord), testable sans discord.py."""
 
+import io
+import subprocess
 
-def build_recording_attachments(audio_data: dict, encoding: str) -> list[tuple[str, object]]:
-    """Construit les paires (nom_de_fichier, objet_fichier) à uploader depuis sink.audio_data."""
-    return [(f"{user_id}.{encoding}", audio.file) for user_id, audio in audio_data.items()]
+
+def pcm_to_mp3(pcm: bytes, sample_rate: int = 48000, channels: int = 2) -> bytes:
+    """Encode du PCM s16le en MP3 via ffmpeg."""
+    return subprocess.run(
+        [
+            "ffmpeg", "-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels),
+            "-i", "pipe:0", "-f", "mp3", "pipe:1",
+        ],
+        input=bytes(pcm),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    ).stdout
+
+
+def build_recording_attachments(pcm_by_user: dict, encoder=pcm_to_mp3) -> list[tuple[str, object]]:
+    """Construit les paires (nom_de_fichier, objet_fichier) à uploader depuis le PCM par utilisateur."""
+    return [
+        (f"{user_id}.mp3", io.BytesIO(encoder(pcm)))
+        for user_id, pcm in pcm_by_user.items()
+    ]
 
 
 def format_recording_summary(user_ids) -> str:

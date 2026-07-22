@@ -1,11 +1,11 @@
 import logging
 import sys
 import json
-import asyncio
 from typing import Optional
 
 import nats
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from config import Config
@@ -14,12 +14,12 @@ from config import Config
 
 class Text(commands.Cog):
     # commands group
-    text = discord.SlashCommandGroup(
-        "text",
-        "Commands for the text cog",
+    text = app_commands.Group(
+        name="text",
+        description="Commands for the text cog",
         guild_ids=[Config.GUILD_ID],
     )
-    
+
     def __init__(self, bot: commands.Bot) -> None:
         super().__init__()
         self.bot = bot
@@ -51,17 +51,17 @@ class Text(commands.Cog):
     async def on_fragment(self, msg) -> None:
         if not self.chat_activated or not self.active_channel:
             return
-            
+
         data = json.loads(msg.data.decode())
         text_fragment = data.get("text", "")
-        
+
         if text_fragment:
             try:
                 await self.active_channel.send(text_fragment)
             except Exception as e:
                 self.logger.error(f"Error sending fragment to Discord: {e}")
 
-    def cleanup(self) -> None:
+    def cog_unload(self) -> None:
         self.logger.info("Cleaning up Text cog resources.")
         if self.nc and not self.nc.is_closed:
             self.bot.loop.create_task(self.nc.close())
@@ -89,14 +89,14 @@ class Text(commands.Cog):
         if self.nc:
             formatted_msg = f"{message.author.display_name} said: {message.content}"
             payload = {"text": formatted_msg}
-            
+
             images = []
             for att in message.attachments:
                 if att.content_type and att.content_type.startswith("image/"):
                     images.append(att.url)
                     if len(images) == 5:
                         break
-                        
+
             if images:
                 payload["images"] = images
 
@@ -106,12 +106,11 @@ class Text(commands.Cog):
                 self.logger.error(f"Failed to publish to NATS: {e}")
 
     @text.command(
-        guild_ids=[Config.GUILD_ID],
         name="activate_chat",
         description="Activate the ability to chat with the assistant",
     )
     async def text_chat(
-        self, ctx: discord.ApplicationContext, force_state: Optional[bool] = None
+        self, interaction: discord.Interaction, force_state: Optional[bool] = None
     ) -> None:
         """
         Toggle chat mode for Texte, optionally forcing the state.
@@ -124,17 +123,8 @@ class Text(commands.Cog):
         else:
             self.chat_activated = force_state
         state = "on" if self.chat_activated else "off"
-        await ctx.respond(f"chat mode set to: {state}")
+        await interaction.response.send_message(f"chat mode set to: {state}")
 
 
-def setup(bot: commands.Bot) -> None:
-    bot.add_cog(Text(bot))
-
-def teardown(bot: commands.Bot) -> None:
-    cog = bot.get_cog("Text")
-    if cog:
-        cog.cleanup()
-    try:
-        bot.remove_cog("Text")
-    except Exception as exc:
-        print(f"Error removing cog Text: {exc}")
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(Text(bot))

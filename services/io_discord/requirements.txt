@@ -1,4 +1,9 @@
-py-cord[voice]==2.8.0
+discord.py[voice]==2.7.1
+davey==0.1.6
+# DAVE decryption for voice receive — pinned to the head of unmerged upstream PR
+# https://github.com/imayhaveborkedit/discord-ext-voice-recv/pull/54
+# (drop the pin for a PyPI release once it's merged upstream)
+discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv.git@ddd28601fe556f585b869e215f29c8236b95f88f
 nats-py==2.9.0
 python-dotenv==1.0.1
 pytest==9.0.3
