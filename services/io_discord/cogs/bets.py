@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import json
 import os
@@ -20,8 +21,12 @@ class BetsCog(commands.Cog):
 
         self.bets = self.load_bets()  # We load bets from the JSON file on startup
 
-    bets = discord.SlashCommandGroup("bets", "Bet management commands", guild_ids=[Config.GUILD_ID])
-    bets_management = bets.create_subgroup("manage", "Administrative bet management commands", guild_ids=[Config.GUILD_ID])
+    bets = app_commands.Group(
+        name="bets", description="Bet management commands", guild_ids=[Config.GUILD_ID]
+    )
+    bets_management = app_commands.Group(
+        name="manage", description="Administrative bet management commands", parent=bets
+    )
 
     # ---------------------------------------------------------------------
     # JSON DATA HANDLING
@@ -48,18 +53,12 @@ class BetsCog(commands.Cog):
     # ---------------------------------------------------------------------
     # CREATING A BET
     # ---------------------------------------------------------------------
-    @bets_management.command(guild_ids=[Config.GUILD_ID], name="create")
-    @commands.has_permissions(administrator=True)
-    async def create_bet(self, ctx, title: str, win_condition: str, participants:str):
+    @bets_management.command(name="create", description="Create a new bet")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def create_bet(self, interaction: discord.Interaction, title: str, win_condition: str, participants: str):
         """
         Create a new bet with a single participants string.
         We expect mentions like: <@1234> <@5678>
-
-        Usage:
-          !createbet <title> <win_condition> <participants>
-
-        Example:
-          !createbet "Big Match" "First to 10 kills" "@User1 @User2"
         """
         # 1) Prepare to parse the participants string.
         # We'll split by whitespace and drop any empty entries:
@@ -73,7 +72,7 @@ class BetsCog(commands.Cog):
         for p in raw_parts:
             match = mention_pattern.match(p)
             if not match:
-                return await ctx.send(
+                return await interaction.response.send_message(
                     f"Invalid participant format: `{p}`. "
                     "Please mention users like `<@1234567890>`."
                 )
@@ -106,85 +105,72 @@ class BetsCog(commands.Cog):
             inline=False
         )
         embed.set_footer(
-            text="Use !bet <bet_id> <participant_mention> [amount] to place your bet."
+            text="Use /bets place_bet <bet_id> <participant_mention> [amount] to place your bet."
         )
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
     # ---------------------------------------------------------------------
     # PLACING A BET
     # ---------------------------------------------------------------------
-    @bets.command(guild_ids=[Config.GUILD_ID], name="place_bet")
-    async def place_bet(self, ctx, bet_id: str, participant: str, amount = 0):
+    @bets.command(name="place_bet", description="Place a bet on a participant")
+    async def place_bet(self, interaction: discord.Interaction, bet_id: str, participant: str, amount: int = 0):
         """
         Place a bet on a specific participant of a bet.
-
-        Usage:
-          !bet <bet_id> <participant> <bet_type> [amount]
-
-        - bet_id: The unique ID of the bet
-        - participant: Must match one in the bet's participants list
-        - amount: If bet_type == "monetary", specify how much you're betting (integer)
         """
         # 1. Check if the bet_id is valid
         if bet_id not in self.bets:
-            return await ctx.send(f"Bet with ID `{bet_id}` does not exist.")
+            return await interaction.response.send_message(f"Bet with ID `{bet_id}` does not exist.")
 
         bet_data = self.bets[bet_id]
 
         # 2. Check if the bet is already resolved
         if bet_data.get("resolved"):
-            return await ctx.send(f"This bet (`{bet_id}`) is already resolved. No new bets allowed.")
+            return await interaction.response.send_message(f"This bet (`{bet_id}`) is already resolved. No new bets allowed.")
 
         # 3. Validate participant
         if participant not in bet_data["participants"]:
-            return await ctx.send(
+            return await interaction.response.send_message(
                 f"Invalid participant `{participant}`. Choose from {bet_data['participants']}."
             )
 
-        # 4. Validate bet type
-        # if bet_type not in ["money", "else"]:
-            # return await ctx.send("Bet type must be either 'money' or 'else'.")
-
-        # 5. If bet type is monetary, ensure amount > 0
+        # 4. Ensure amount > 0
         if amount <= 0:
-            return await ctx.send("For monetary bets, please specify a positive amount.")
+            return await interaction.response.send_message("For monetary bets, please specify a positive amount.")
 
-        user_id = str(ctx.author.id)
+        user_id = str(interaction.user.id)
 
         # Record the bet
         bet_data["bettors"][user_id] = {
             "participant": participant,
-            #"type": bet_type,
             "amount": amount
         }
 
         self.save_bets()
 
-        await ctx.send(f"{ctx.author.mention} placed a **{amount}** bet on **{participant}** with ID `{bet_id}`.")
+        await interaction.response.send_message(
+            f"{interaction.user.mention} placed a **{amount}** bet on **{participant}** with ID `{bet_id}`."
+        )
 
     # ---------------------------------------------------------------------
     # MODIFY A BET
     # ---------------------------------------------------------------------
-    @bets_management.command(guild_ids=[Config.GUILD_ID], name="modify_bet")
-    @commands.has_permissions(administrator=True)
-    async def modify_bet(self, ctx, bet_id: str, field: str, *, new_value: str):
+    @bets_management.command(name="modify_bet", description="Modify an existing bet (admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def modify_bet(self, interaction: discord.Interaction, bet_id: str, field: str, new_value: str):
         """
         Modify an existing bet. Only admins can do this.
-
-        Usage:
-          !modifybet <bet_id> <field> <new_value>
 
         - field can be one of: title, win_condition, participants
         - new_value is the updated value (for participants, pass them comma-separated).
         """
         if bet_id not in self.bets:
-            return await ctx.send(f"Bet with ID `{bet_id}` does not exist.")
+            return await interaction.response.send_message(f"Bet with ID `{bet_id}` does not exist.")
 
         bet_data = self.bets[bet_id]
 
         # Simple check to ensure we only allow certain fields
         if field not in ["title", "win_condition", "participants"]:
-            return await ctx.send("You can only modify 'title', 'win_condition', or 'participants'.")
+            return await interaction.response.send_message("You can only modify 'title', 'win_condition', or 'participants'.")
 
         if field == "participants":
             # new_value might be a string like "TeamA, TeamB, TeamC"
@@ -194,27 +180,24 @@ class BetsCog(commands.Cog):
             bet_data[field] = new_value
 
         self.save_bets()
-        await ctx.send(f"Successfully modified `{field}` for bet `{bet_id}`.")
+        await interaction.response.send_message(f"Successfully modified `{field}` for bet `{bet_id}`.")
 
     # ---------------------------------------------------------------------
     # ADD A PARTICIPANT TO AN EXISTING BET
     # ---------------------------------------------------------------------
-    @bets_management.command(guild_ids=[Config.GUILD_ID], name="add_participant")
-    @commands.has_permissions(administrator=True)
-    async def add_participant(self, ctx, bet_id: str, participant: str):
+    @bets_management.command(name="add_participant", description="Add a participant to a bet (admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def add_participant(self, interaction: discord.Interaction, bet_id: str, participant: str):
         """
         Add a single participant to an existing bet. Requires admin permissions.
-
-        Usage:
-          !addparticipant <bet_id> <participant_mention>
         """
         # 1) Check if bet exists
         if bet_id not in self.bets:
-            return await ctx.send(f"Bet with ID `{bet_id}` does not exist.")
+            return await interaction.response.send_message(f"Bet with ID `{bet_id}` does not exist.")
 
         # 2) Check if bet already resolved
         if self.bets[bet_id].get("resolved"):
-            return await ctx.send(
+            return await interaction.response.send_message(
                 f"Bet `{bet_id}` is already resolved. Cannot add new participants."
             )
 
@@ -222,34 +205,31 @@ class BetsCog(commands.Cog):
         mention_pattern = re.compile(r"^<@!?(\d+)>$")
         match = mention_pattern.match(participant)
         if not match:
-            return await ctx.send(
+            return await interaction.response.send_message(
                 f"Invalid participant format: `{participant}`. "
                 "Please mention users like `<@1234567890>`."
             )
 
         # 4) Check if participant is already in the list
         if participant in self.bets[bet_id]["participants"]:
-            return await ctx.send("That user is already a participant in this bet.")
+            return await interaction.response.send_message("That user is already a participant in this bet.")
 
         # 5) Append participant
         self.bets[bet_id]["participants"].append(participant)
         self.save_bets()
 
-        await ctx.send(f"Participant {participant} added to bet `{bet_id}`.")
+        await interaction.response.send_message(f"Participant {participant} added to bet `{bet_id}`.")
 
     # ---------------------------------------------------------------------
     # SHOW A SPECIFIC BET
     # ---------------------------------------------------------------------
-    @bets.command(guild_ids=[Config.GUILD_ID], name="show_bet")
-    async def show_bet(self, ctx, bet_id: str):
+    @bets.command(name="show_bet", description="Display details of an existing bet")
+    async def show_bet(self, interaction: discord.Interaction, bet_id: str):
         """
         Display details of an existing bet.
-
-        Usage:
-          !showbet <bet_id>
         """
         if bet_id not in self.bets:
-            return await ctx.send(f"Bet with ID `{bet_id}` does not exist.")
+            return await interaction.response.send_message(f"Bet with ID `{bet_id}` does not exist.")
 
         bet_data = self.bets[bet_id]
 
@@ -276,56 +256,51 @@ class BetsCog(commands.Cog):
         # Optionally, show how many bettors are in
         embed.add_field(name="Total Bettors", value=str(len(bet_data["bettors"])), inline=True)
 
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
     # ---------------------------------------------------------------------
     # DELETE A BET
     # ---------------------------------------------------------------------
-    @bets_management.command(guild_ids=[Config.GUILD_ID], name="delete_bet")
-    @commands.has_permissions(administrator=True)
-    async def delete_bet(self, ctx, bet_id: str):
+    @bets_management.command(name="delete_bet", description="Delete an existing bet (admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def delete_bet(self, interaction: discord.Interaction, bet_id: str):
         """
         Delete an existing bet entirely (Admin only).
-
-        Usage:
-          !deletebet <bet_id>
         """
         if bet_id not in self.bets:
-            return await ctx.send(f"Bet with ID `{bet_id}` does not exist.")
+            return await interaction.response.send_message(f"Bet with ID `{bet_id}` does not exist.")
 
         del self.bets[bet_id]  # Remove it from the dictionary
         self.save_bets()
 
-        await ctx.send(f"Bet with ID `{bet_id}` has been deleted.")
+        await interaction.response.send_message(f"Bet with ID `{bet_id}` has been deleted.")
 
     # ---------------------------------------------------------------------
     # DECLARE A WINNER
     # ---------------------------------------------------------------------
-    @bets_management.command(guild_ids=[Config.GUILD_ID], name="declare_winner")
-    @commands.has_permissions(administrator=True)
-    async def declare_winner(self, ctx, bet_id: str, winner: str):
+    @bets_management.command(name="declare_winner", description="Declare the winner of a bet (admin)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def declare_winner(self, interaction: discord.Interaction, bet_id: str, winner: str):
         """
         Declare the winning participant of a bet (Admin only).
 
-        Usage:
-          !declarewinner <bet_id> <winner>
-
         - Sets the bet as resolved
         - Calculates the monetary payouts, if any
-        - "something_else" bets are just listed
         """
         if bet_id not in self.bets:
-            return await ctx.send(f"Bet with ID `{bet_id}` does not exist.")
+            return await interaction.response.send_message(f"Bet with ID `{bet_id}` does not exist.")
 
         bet_data = self.bets[bet_id]
 
         # Check that the bet isn't already resolved
         if bet_data.get("resolved"):
-            return await ctx.send(f"Bet `{bet_id}` was already resolved with winner `{bet_data.get('winner')}`.")
+            return await interaction.response.send_message(
+                f"Bet `{bet_id}` was already resolved with winner `{bet_data.get('winner')}`."
+            )
 
         # Validate winner
         if winner not in bet_data["participants"]:
-            return await ctx.send(
+            return await interaction.response.send_message(
                 f"Invalid winner `{winner}`. Must be one of {bet_data['participants']}."
             )
 
@@ -372,8 +347,8 @@ class BetsCog(commands.Cog):
 
         self.save_bets()  # Save changes
 
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed)
 
 
-def setup(bot):
-    bot.add_cog(BetsCog(bot))
+async def setup(bot):
+    await bot.add_cog(BetsCog(bot))

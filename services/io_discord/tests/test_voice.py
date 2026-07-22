@@ -3,24 +3,32 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from voice import build_recording_attachments, format_recording_summary
+from voice import build_recording_attachments, format_recording_summary, pcm_to_mp3
 
 
-class FakeAudioData:
-    def __init__(self, file):
-        self.file = file
+def fake_encoder(pcm: bytes) -> bytes:
+    return b"mp3:" + bytes(pcm)
 
 
 def test_build_recording_attachments_names_files_by_user_id():
-    audio_data = {111: FakeAudioData(file="fileobj-a"), 222: FakeAudioData(file="fileobj-b")}
+    pcm_by_user = {111: b"aa", 222: b"bb"}
 
-    result = build_recording_attachments(audio_data, "mp3")
+    result = build_recording_attachments(pcm_by_user, encoder=fake_encoder)
 
-    assert result == [("111.mp3", "fileobj-a"), ("222.mp3", "fileobj-b")]
+    assert [(name, f.read()) for name, f in result] == [
+        ("111.mp3", b"mp3:aa"),
+        ("222.mp3", b"mp3:bb"),
+    ]
 
 
 def test_build_recording_attachments_empty_when_nobody_spoke():
-    assert build_recording_attachments({}, "mp3") == []
+    assert build_recording_attachments({}) == []
+
+
+def test_pcm_to_mp3_encodes_silence():
+    # 0.1s of 48kHz s16le stereo silence through the real ffmpeg
+    mp3 = pcm_to_mp3(b"\x00" * (48000 * 2 * 2 // 10))
+    assert len(mp3) > 0
 
 
 def test_format_recording_summary_lists_all_speakers():
