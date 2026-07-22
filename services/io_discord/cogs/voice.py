@@ -9,17 +9,6 @@ from discord.sinks.errors import RecordingException
 from config import Config
 from voice import build_recording_attachments, format_recording_summary
 
-# Discord's voice mode negotiation (discord/gateway.py's initial_connection) picks the
-# first of its own offered modes that's also in VoiceClient.supported_modes — and the
-# default list includes the newer AEAD mode "aead_xchacha20_poly1305_rtpsize", which is
-# unreliable on this py-cord 2.7.0rc1 build (voice handshake never completes / garbled
-# audio). Dropping it forces negotiation onto the older, stable non-AEAD modes.
-discord.VoiceClient.supported_modes = (
-    "xsalsa20_poly1305_lite",
-    "xsalsa20_poly1305_suffix",
-    "xsalsa20_poly1305",
-)
-
 
 class Voice(commands.Cog):
     voice = discord.SlashCommandGroup(
