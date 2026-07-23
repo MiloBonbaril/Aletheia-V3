@@ -8,6 +8,7 @@ Ce service implémente un bot Discord servant de passerelle de communication ent
 - **Diffusion des Réponses** : S'abonne au flux `lobe.fragment_stream` pour renvoyer les réponses de l'IA en temps réel sur le canal Discord.
 - **Présence Vocale** : Publie `io.presence.discord_voice` à chaque changement d'occupation des salons vocaux, pour que d'autres services puissent conditionner leur comportement à la présence d'un public.
 - **Capture Vocale (test)** : Commandes slash `/voice join`, `/voice leave`, `/voice record` pour rejoindre un salon vocal et enregistrer un échantillon audio (mp3) de tous les locuteurs présents, afin de vérifier la capture avant de brancher un pipeline en aval.
+- **Streaming Vocal Temps Réel** : Dès `/voice join` réussi, le PCM de chaque locuteur du salon est diffusé en continu sur `io.discord.voice.frame` (identité incluse) pour que `io_oreilles` (lancé avec `--discord`) fasse tourner sa vraie pipeline VAD par locuteur ; `/voice record` met cette diffusion en pause le temps de sa capture manuelle puis la reprend.
 - **Interface Utilisateur** : Permet une interaction asynchrone avec l'entité sans nécessiter d'interface locale.
 
 ## ⚙️ Configuration & Lancement
@@ -27,7 +28,7 @@ python bot.py
 ```
 
 ## 🔌 Interface NATS
-- **Publie sur** : `io.user.msg.text`, `io.presence.discord_voice`
+- **Publie sur** : `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`
 - **S'abonne à** : `lobe.fragment_stream`
 
 ## 🧪 Tests

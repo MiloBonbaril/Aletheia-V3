@@ -11,6 +11,9 @@ use std::path::PathBuf;
 mod segmenter;
 use segmenter::{FrameOutcome, VadSegmenter};
 
+mod discord_audio;
+use discord_audio::{stereo_i16_to_mono_f32, DiscordVoiceFrame, SpeakerPipeline};
+
 #[derive(Serialize)]
 struct TranscriptionEvent {
     text: String,
@@ -122,9 +125,15 @@ async fn main() -> Result<()> {
     let client = async_nats::connect(&nats_url).await.context("Failed to connect to NATS")?;
     info!("Connected to NATS");
 
-    // 2. Setup Thread 2 -> Thread 3 Queue
-    let (tx_speech, mut rx_speech) = mpsc::channel::<Vec<f32>>(32);
+    // --discord disables local mic capture for this run in favour of per-speaker
+    // audio streamed over NATS from io_discord (see discord_audio.rs).
+    let discord_mode = std::env::args().any(|a| a == "--discord");
 
+    // 2. Setup Thread 2 -> Thread 3 Queue. The identity rides along so downstream
+    // (cortex) can attribute the segment to a Discord speaker; local mic audio has none.
+    let (tx_speech, mut rx_speech) = mpsc::channel::<(Vec<f32>, Option<String>)>(32);
+
+    if !discord_mode {
     // 3. Setup Ringbuf for Thread 1 -> Thread 2
     // Arbitrary size: 160_000 samples is 10s at 16kHz, roughly 3.3s at 48kHz.
     let rb = ringbuf::HeapRb::<f32>::new(160_000);
@@ -190,7 +199,7 @@ async fn main() -> Result<()> {
     // 5. Setup Thread 2 (VAD Watcher)
     std::thread::spawn(move || {
         info!("Started VAD Thread (Thread 2)");
-        
+
         let target_sr = 16_000;
         let mut resampler = if sample_rate != target_sr {
             let params = SincInterpolationParameters {
@@ -210,7 +219,7 @@ async fn main() -> Result<()> {
         } else {
             None
         };
-        
+
         let mut segmenter = VadSegmenter::new();
         let mut internal_buf = Vec::new();
         let mut vad_buf = Vec::new();
@@ -285,7 +294,7 @@ async fn main() -> Result<()> {
                             FrameOutcome::SpeechStarted => info!("Speech started (prob: {:.2})", prob),
                             FrameOutcome::SpeechEnded(segment) => {
                                 info!("Speech ended. Captured {} samples.", segment.len());
-                                tx_speech.blocking_send(segment).unwrap();
+                                tx_speech.blocking_send((segment, None)).unwrap();
                             }
                             FrameOutcome::Speaking | FrameOutcome::Idle => {}
                         }
@@ -309,22 +318,93 @@ async fn main() -> Result<()> {
             }
         }
     });
+    } else {
+        // Discord mode: audio arrives per-speaker over NATS instead of from a
+        // local device. One VAD thread services every active speaker, each with
+        // its own resample/segmenter state so speakers don't interrupt each other.
+        info!("Running in DISCORD mode: local microphone capture disabled.");
 
-    let raw_mode = std::env::var("RAW_AUDIO").map(|v| v == "true" || v == "1").unwrap_or(false);
+        let (tx_frame, rx_frame) = std::sync::mpsc::channel::<(String, String, Vec<f32>)>();
+
+        let nats_discord = client.clone();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            let mut sub = match nats_discord.subscribe("io.discord.voice.frame").await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to subscribe to io.discord.voice.frame: {:?}", e);
+                    return;
+                }
+            };
+            info!("👂 Listening for Discord voice frames on 'io.discord.voice.frame'...");
+            while let Some(msg) = sub.next().await {
+                let frame: DiscordVoiceFrame = match serde_json::from_slice(&msg.payload) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error!("Failed to parse Discord voice frame: {:?}", e);
+                        continue;
+                    }
+                };
+                use base64::Engine;
+                let pcm_bytes = match base64::engine::general_purpose::STANDARD.decode(&frame.pcm) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        error!("Failed to decode Discord voice frame PCM: {:?}", e);
+                        continue;
+                    }
+                };
+                let mono = stereo_i16_to_mono_f32(&pcm_bytes);
+                if tx_frame.send((frame.speaker_id, frame.speaker_name, mono)).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let tx_speech_discord = tx_speech.clone();
+        std::thread::spawn(move || {
+            info!("Started Discord per-speaker VAD thread");
+            use silero::Session;
+            let mut session = Session::bundled()
+                .expect("Failed to load Silero VAD model. Is ORT_DYLIB_PATH set? See README.");
+            let mut pipelines: std::collections::HashMap<String, (String, SpeakerPipeline)> =
+                std::collections::HashMap::new();
+
+            while let Ok((speaker_id, speaker_name, mono_48k)) = rx_frame.recv() {
+                let entry = pipelines
+                    .entry(speaker_id)
+                    .or_insert_with(|| (speaker_name.clone(), SpeakerPipeline::new()));
+                entry.0 = speaker_name;
+                let (name, pipeline) = entry;
+
+                for segment in pipeline.push_mono_48k(&mut session, &mono_48k) {
+                    info!("Speech ended for {}. Captured {} samples.", name, segment.len());
+                    if tx_speech_discord.blocking_send((segment, Some(name.clone()))).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    let raw_mode = std::env::var("RAW_AUDIO").map(|v| v == "true" || v == "1").unwrap_or(false)
+        || discord_mode;
 
     if raw_mode {
         info!("Running in RAW AUDIO mode. Whisper model will NOT be loaded.");
-        while let Some(speech) = rx_speech.recv().await {
+        while let Some((speech, speaker)) = rx_speech.recv().await {
             info!("Received speech chunk of len {} (raw mode)", speech.len());
             let start = std::time::Instant::now();
             let wav_data = create_wav_data(&speech);
             use base64::Engine;
             let b64_wav = base64::engine::general_purpose::STANDARD.encode(&wav_data);
-            
-            let event = serde_json::json!({
+
+            let mut event = serde_json::json!({
                 "audio": b64_wav,
                 "format": "wav"
             });
+            if let Some(name) = &speaker {
+                event["speaker"] = serde_json::json!(name);
+            }
             match serde_json::to_vec(&event) {
                 Ok(payload) => {
                     if let Err(e) = client.publish("io.user.speak.raw".to_string(), payload.into()).await {
@@ -370,7 +450,7 @@ async fn main() -> Result<()> {
         
         info!("STT ready (language: {}). Waiting for speech events...", 
             stt_language.as_deref().unwrap_or("auto-detect"));
-        while let Some(speech) = rx_speech.recv().await {
+        while let Some((speech, _speaker)) = rx_speech.recv().await {
             info!("Received speech chunk of len {}", speech.len());
             let start = std::time::Instant::now();
             let lang = stt_language.as_deref();
