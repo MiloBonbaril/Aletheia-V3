@@ -32,6 +32,7 @@ struct ContextBuildPayload {
     prompt: String,
     correlation_id: String,
     n_history: usize,
+    skip_rag: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -72,6 +73,13 @@ fn voice_prompt_text(speaker: &Option<String>) -> String {
         .unwrap_or_default()
 }
 
+/// Voice-originated prompts (raw audio attached) skip Hippocampe's RAG lookup —
+/// the Qdrant/SentenceTransformers round-trip can't keep pace with real-time
+/// voice conversation, and RAG is only ever useful for the text it's asked about.
+fn should_skip_rag(audio: &Option<String>) -> bool {
+    audio.is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +102,16 @@ mod tests {
     #[test]
     fn voice_prompt_text_empty_without_speaker() {
         assert_eq!(voice_prompt_text(&None), "");
+    }
+
+    #[test]
+    fn rag_skipped_when_audio_present() {
+        assert!(should_skip_rag(&Some("base64...".to_string())));
+    }
+
+    #[test]
+    fn rag_kept_when_no_audio() {
+        assert!(!should_skip_rag(&None));
     }
 }
 
@@ -181,6 +199,7 @@ async fn run_dispatcher_worker(
         match event.payload {
             EventPayload::PromptInbound { text, images, audio, source } => {
                 info!("📥 Routing inbound prompt (length: {}, images: {}, has_audio: {}, source: {:?})", text.len(), images.len(), audio.is_some(), source);
+                let skip_rag = should_skip_rag(&audio);
 
                 // Track session start
                 active_sessions.insert(event.session_id.clone(), SessionContext {
@@ -202,6 +221,7 @@ async fn run_dispatcher_worker(
                     prompt: text,
                     correlation_id: corr_id,
                     n_history: 20,
+                    skip_rag,
                 };
 
                 // Dispatch parallèle vers le Lobe Frontal ET l'Hippocampe
