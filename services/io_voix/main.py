@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import os
 import urllib.request
@@ -10,6 +11,8 @@ import sounddevice as sd
 import onnxruntime as ort
 from kokoro_onnx import Kokoro
 
+from audio import encode_wav_b64
+
 # ================= Configuration =================
 MODELS_DIR = os.getenv("KOKORO_MODELS_DIR", os.path.join(os.path.dirname(__file__), "models"))
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
@@ -18,6 +21,7 @@ VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mode
 VOICE_NAME = os.getenv("KOKORO_VOICE", "ff_siwis")
 SPEECH_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
 SAMPLE_RATE = 22050  # Fréquence native de Kokoro
+MUTE_LOCAL_PLAYBACK = os.getenv("MUTE_LOCAL_PLAYBACK", "false").lower() in ("1", "true")
 
 # Isolation totale de l'inférence (1 seul thread Python pour piloter ONNX)
 inference_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="KokoroInference")
@@ -65,16 +69,28 @@ def native_audio_player_worker(loop, nc):
     Maintient le flux ALSA/PulseAudio/PipeWire ouvert en permanence.
     Zéro allocation dynamique au moment de jouer le son.
     """
-    print("🔊 Flux audio matériel persistant [OK]")
-    
-    with sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32') as stream:
+    if MUTE_LOCAL_PLAYBACK:
+        print("🔇 Lecture locale coupée (MUTE_LOCAL_PLAYBACK) — audio publié sur NATS uniquement.")
+    else:
+        print("🔊 Flux audio matériel persistant [OK]")
+
+    # ponytail: nullcontext() plutôt qu'un `if` séparé pour ouvrir/sauter le stream —
+    # `stream` vaut None des deux côtés du `with`, donc le reste de la boucle ne
+    # branche que sur `if stream is not None`.
+    stream_ctx = (
+        contextlib.nullcontext()
+        if MUTE_LOCAL_PLAYBACK
+        else sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype='float32')
+    )
+    with stream_ctx as stream:
         while True:
             item = audio_sync_queue.get()
-            if item is None: 
+            if item is None:
                 break
-                
+
             samples, sequence, text, is_last = item
-            
+            samples = samples.astype(np.float32)
+
             if nc:
                 asyncio.run_coroutine_threadsafe(
                     nc.publish("io.voice.speak.start", json.dumps({
@@ -83,8 +99,9 @@ def native_audio_player_worker(loop, nc):
                 )
 
             # Écriture directe et synchrone dans le buffer de la carte son
-            stream.write(samples.astype(np.float32).reshape(-1, 1))
-            
+            if stream is not None:
+                stream.write(samples.reshape(-1, 1))
+
             if nc:
                 asyncio.run_coroutine_threadsafe(
                     nc.publish("io.voice.speak.end", json.dumps({
@@ -130,18 +147,32 @@ async def main():
     # Lancement du thread audio natif
     audio_thread = loop.run_in_executor(None, native_audio_player_worker, loop, nc)
 
+    # Tâches d'encodage/publication en arrière-plan : gardées en vie ici pour éviter
+    # qu'asyncio ne les garbage-collecte en cours de route (piège classique de
+    # create_task sans référence conservée).
+    background_tasks: set[asyncio.Task] = set()
+
+    async def encode_and_publish_audio(samples, sequence, is_last):
+        try:
+            audio_b64 = await loop.run_in_executor(None, encode_wav_b64, samples, SAMPLE_RATE)
+            await nc.publish("io.voice.speak.audio", json.dumps({
+                "sequence": sequence, "audio": audio_b64, "format": "wav", "is_last": is_last,
+            }).encode())
+        except Exception as e:
+            print(f"⚠️ Échec de publication audio : {e}")
+
     async def fragment_handler(msg):
         try:
             data = json.loads(msg.data.decode())
             text = data.get("text", "")
             sequence = data.get("sequence", 0)
             is_last = data.get("is_last", False)
-            
+
             if not text.strip():
                 if is_last:
                     audio_sync_queue.put((np.zeros(100), sequence, "", is_last))
                 return
-            
+
             # Inférence poussée direct dans notre exécuteur calibré à 6 threads
             def inference_job():
                 try:
@@ -151,11 +182,18 @@ async def main():
                     return None
 
             result = await loop.run_in_executor(inference_executor, inference_job)
-            
+
             if result:
                 samples, _ = result
+                samples = samples.astype(np.float32)
+                # Mise en file immédiate pour la lecture/le timing — l'encodage WAV/base64
+                # tourne à côté (thread pool par défaut), pour ne jamais retarder le TTFA.
                 audio_sync_queue.put((samples, sequence, text, is_last))
-                
+                if nc:
+                    task = asyncio.create_task(encode_and_publish_audio(samples, sequence, is_last))
+                    background_tasks.add(task)
+                    task.add_done_callback(background_tasks.discard)
+
         except Exception as e:
             print(f"⚠️ Erreur Stream Handler: {e}")
 
