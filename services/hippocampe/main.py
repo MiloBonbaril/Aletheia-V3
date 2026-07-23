@@ -52,13 +52,16 @@ async def main():
         prompt = data.get("prompt", "")
         correlation_id = data.get("correlation_id", "")
         n_history = data.get("n_history", 20)
+        skip_rag = data.get("skip_rag", False)
 
-        print(f"[Hippocampe] 📥 Context build reçu (corr={correlation_id[:8]}..., prompt_len={len(prompt)})")
+        print(f"[Hippocampe] 📥 Context build reçu (corr={correlation_id[:8]}..., prompt_len={len(prompt)}, skip_rag={skip_rag})")
 
-        # Exécution parallèle des 2 sources de données
+        # Exécution parallèle des 2 sources de données. RAG (embedding + Qdrant)
+        # est sauté sur demande (typiquement en vocal, où sa latence ne suit pas
+        # la cadence temps réel) — l'appelant en juge, Hippocampe ne fait que suivre.
         history_result, rag_result = await asyncio.gather(
             get_recent_history(n_history),
-            rag_manager.query_memory_async(prompt) if prompt else _empty_coroutine(),
+            rag_manager.query_memory_async(prompt) if prompt and not skip_rag else _empty_coroutine(),
             return_exceptions=True
         )
 

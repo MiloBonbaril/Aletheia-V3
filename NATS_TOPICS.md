@@ -89,13 +89,14 @@ L'ordre d'inférence envoyé par le Cortex au Lobe Frontal. Inclut un `correlati
   ```
 
 #### `hippocampe.context.build`
-Demande de construction de contexte envoyée par le Cortex à l'Hippocampe. Déclenche la récupération parallèle de l'historique PostgreSQL et de la recherche RAG Qdrant.
+Demande de construction de contexte envoyée par le Cortex à l'Hippocampe. Déclenche la récupération parallèle de l'historique PostgreSQL et de la recherche RAG Qdrant, sauf si `skip_rag` est vrai (mis par le Cortex dès qu'un `PromptInbound` porte de l'audio, c-à-d une origine vocale — le round-trip embedding+Qdrant ne suit pas la cadence temps réel de la conversation vocale).
 - **Payload (JSON) :**
   ```json
   {
     "prompt": "Texte du message utilisateur",
     "correlation_id": "uuid-v4",
-    "n_history": 20
+    "n_history": 20,
+    "skip_rag": false
   }
   ```
 
