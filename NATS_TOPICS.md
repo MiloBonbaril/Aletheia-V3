@@ -242,6 +242,39 @@ Envoi de texte au service de synthèse vocale.
   }
   ```
 
+#### `io.voice.speak.start`
+Publié par `io_voix` juste avant de jouer/publier l'audio d'un fragment synthétisé (timing, pas d'audio).
+- **Payload (JSON) :**
+  ```json
+  {
+    "sequence": 1,
+    "text": "Bonjour ",
+    "is_last": false
+  }
+  ```
+
+#### `io.voice.speak.audio`
+Audio synthétisé par `io_voix` pour un fragment, publié entre `io.voice.speak.start` et `io.voice.speak.end`, en plus de (et non à la place de) la lecture locale sur la carte son. Absent pour les fragments sans texte (silence de fin de flux). Permet à d'autres services (ex: un bridge Discord) de recevoir l'audio sans dépendre du haut-parleur local.
+- **Payload (JSON) :**
+  ```json
+  {
+    "sequence": 1,
+    "audio": "base64... (WAV, mono, 22050Hz)",
+    "format": "wav",
+    "is_last": false
+  }
+  ```
+
+#### `io.voice.speak.end`
+Publié par `io_voix` juste après avoir joué/publié l'audio d'un fragment synthétisé (timing, pas d'audio).
+- **Payload (JSON) :**
+  ```json
+  {
+    "sequence": 1,
+    "is_last": false
+  }
+  ```
+
 #### `io.face.emotion` (Prévu)
 Commande d'expression faciale pour VTube Studio.
 - **Payload (JSON) :**
