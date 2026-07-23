@@ -1,5 +1,6 @@
 """Cœur pur de la logique d'enregistrement vocal (sans I/O Discord), testable sans discord.py."""
 
+import base64
 import io
 import subprocess
 
@@ -32,3 +33,12 @@ def format_recording_summary(user_ids) -> str:
     if not mentions:
         return "No audio captured — did anyone speak?"
     return f"Recorded audio for: {', '.join(mentions)}."
+
+
+def encode_voice_frame(speaker_id: int, speaker_name: str, pcm: bytes) -> dict:
+    """Construit le payload `io.discord.voice.frame` pour un chunk de PCM d'un locuteur."""
+    return {
+        "speaker_id": str(speaker_id),
+        "speaker_name": speaker_name,
+        "pcm": base64.b64encode(bytes(pcm)).decode(),
+    }

@@ -18,12 +18,17 @@ Ce service assure la perception auditive de Nexus-V en transformant le flux audi
 ### Variables d'Environnement
 - `STT_LANGUAGE` : Langue de transcription (ex: `fr`).
 - `NATS_URL` : URL du broker NATS.
+- `RAW_AUDIO=1` : publie l'audio brut (WAV/base64) sur `io.user.speak.raw` au lieu de transcrire via Whisper.
 
 ### Lancement
 ```bash
-# Selon l'implémentation (Rust/Python)
-cargo run --release
+cargo run --release            # microphone local
+cargo run --release -- --discord   # désactive le micro local ; écoute le PCM par locuteur
+                                    # publié par io_discord sur io.discord.voice.frame
+                                    # (une pipeline VAD indépendante par locuteur ;
+                                    # implique RAW_AUDIO, Whisper n'est pas chargé)
 ```
 
 ## 🔌 Interface NATS
-- **Publie sur** : `io.user.speak`
+- **Publie sur** : `io.user.speak`, `io.user.speak.raw`
+- **Écoute** (`--discord` uniquement) : `io.discord.voice.frame`

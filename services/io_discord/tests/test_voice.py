@@ -3,7 +3,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from voice import build_recording_attachments, format_recording_summary, pcm_to_mp3
+from voice import (
+    build_recording_attachments,
+    encode_voice_frame,
+    format_recording_summary,
+    pcm_to_mp3,
+)
 
 
 def fake_encoder(pcm: bytes) -> bytes:
@@ -37,3 +42,11 @@ def test_format_recording_summary_lists_all_speakers():
 
 def test_format_recording_summary_handles_no_speakers():
     assert format_recording_summary([]) == "No audio captured — did anyone speak?"
+
+
+def test_encode_voice_frame_base64_encodes_pcm():
+    assert encode_voice_frame(111, "Alice", b"\x01\x02") == {
+        "speaker_id": "111",
+        "speaker_name": "Alice",
+        "pcm": "AQI=",
+    }

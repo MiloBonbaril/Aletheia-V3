@@ -1,13 +1,15 @@
 import asyncio
+import json
 import logging
 import sys
 
 import discord
+import nats
 from discord import app_commands
 from discord.ext import commands, voice_recv
 
 from config import Config
-from voice import build_recording_attachments, format_recording_summary
+from voice import build_recording_attachments, encode_voice_frame, format_recording_summary
 
 
 class _RecordSink(voice_recv.AudioSink):
@@ -26,6 +28,45 @@ class _RecordSink(voice_recv.AudioSink):
 
     def cleanup(self) -> None:
         pass
+
+
+class _DiscordAudioBridge(voice_recv.AudioSink):
+    """Streams each speaker's live PCM to io_oreilles (`--discord` mode) over NATS,
+    tagged with speaker identity, so it runs the real VAD pipeline per speaker."""
+
+    def __init__(self, cog: "Voice") -> None:
+        super().__init__()
+        # ponytail: read self._cog.nc fresh on every write rather than snapshotting
+        # it at construction time — NATS connects async on cog load, so if /voice
+        # join races ahead of setup_nats() finishing, this self-heals once it
+        # connects instead of silently no-oping until a leave+rejoin.
+        self._cog = cog
+
+    def wants_opus(self) -> bool:
+        return False
+
+    def write(self, user, data) -> None:
+        nc = self._cog.nc
+        if user is None or nc is None:
+            return
+        payload = json.dumps(
+            encode_voice_frame(user.id, user.display_name, data.pcm)
+        ).encode()
+        asyncio.run_coroutine_threadsafe(
+            nc.publish("io.discord.voice.frame", payload), self._cog.bot.loop
+        )
+
+    def cleanup(self) -> None:
+        pass
+
+
+def _new_bridge_sink(cog: "Voice") -> voice_recv.AudioSink:
+    """`_DiscordAudioBridge` wrapped in `SilenceGeneratorSink`: Discord stops sending
+    packets ~100ms after a speaker goes quiet (DTX), which is far short of the
+    VadSegmenter's ~600ms silence-to-end threshold — the wrapper synthesizes silence
+    packets to keep `write()` firing until the speaker actually leaves the channel,
+    so segments genuinely close out instead of hanging open forever."""
+    return voice_recv.SilenceGeneratorSink(_DiscordAudioBridge(cog))
 
 
 class Voice(commands.Cog):
@@ -48,8 +89,20 @@ class Voice(commands.Cog):
 
         self.logger.info("Voice cog initialized.")
 
+        self.nc = None
+        self.bot.loop.create_task(self.setup_nats())
+
+    async def setup_nats(self):
+        try:
+            self.nc = await nats.connect("nats://localhost:4222")
+            self.logger.info("Connected to NATS.")
+        except Exception as e:
+            self.logger.error(f"Failed to connect to NATS: {e}")
+
     def cog_unload(self) -> None:
         self.logger.info("Cleaning up Voice cog resources.")
+        if self.nc and not self.nc.is_closed:
+            self.bot.loop.create_task(self.nc.close())
         self.logger.handlers.clear()
 
     async def _join_vc(self, interaction: discord.Interaction) -> dict:
@@ -95,6 +148,9 @@ class Voice(commands.Cog):
         if result["status"] != "success":
             await interaction.followup.send(result["message"])
             return
+        vc = result["voice_client"]
+        if not vc.is_listening():
+            vc.listen(_new_bridge_sink(self))
         await interaction.followup.send(f"Joined {result['channel'].name}.")
 
     @voice.command(name="leave", description="Leave the current voice channel")
@@ -120,9 +176,17 @@ class Voice(commands.Cog):
         if not vc or not vc.is_connected():
             await interaction.response.send_message("Not in a voice channel — use /voice join first.")
             return
-        if vc.is_listening():
+
+        # ponytail: only one sink can listen at a time, so pause the live NATS
+        # bridge (started on join) for the duration of this manual recording
+        # and resume it once the mp3 capture is done. A manual recording already
+        # in progress still gets rejected, same as before.
+        was_streaming = isinstance(vc.sink, voice_recv.SilenceGeneratorSink) if vc.is_listening() else False
+        if vc.is_listening() and not was_streaming:
             await interaction.response.send_message("Already recording.")
             return
+        if was_streaming:
+            vc.stop_listening()
 
         await interaction.response.send_message(f"Recording for {duration}s...")
         sink = _RecordSink()
@@ -139,6 +203,9 @@ class Voice(commands.Cog):
             await interaction.channel.send(summary, files=files)
         except Exception as e:
             self.logger.error(f"Failed to send recording: {e}")
+
+        if was_streaming and vc.is_connected() and not vc.is_listening():
+            vc.listen(_new_bridge_sink(self))
 
 
 async def setup(bot: commands.Bot) -> None:

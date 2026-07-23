@@ -62,6 +62,16 @@ fn interaction_source_label(source: &Option<String>) -> String {
     source.clone().unwrap_or_else(|| "user".to_string())
 }
 
+/// Text riding alongside a raw-audio `PromptInbound` so the LLM knows who it's
+/// hearing (`io_oreilles --discord` mode tags each segment with a speaker name);
+/// empty when the audio has no attached identity (local mic).
+fn voice_prompt_text(speaker: &Option<String>) -> String {
+    speaker
+        .as_ref()
+        .map(|name| format!("{} said (voice):", name))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +84,16 @@ mod tests {
     #[test]
     fn absent_source_defaults_to_user() {
         assert_eq!(interaction_source_label(&None), "user");
+    }
+
+    #[test]
+    fn voice_prompt_text_includes_speaker_name() {
+        assert_eq!(voice_prompt_text(&Some("Alice".to_string())), "Alice said (voice):");
+    }
+
+    #[test]
+    fn voice_prompt_text_empty_without_speaker() {
+        assert_eq!(voice_prompt_text(&None), "");
     }
 }
 
@@ -337,6 +357,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             audio: String,
             #[serde(default)]
             _format: String,
+            #[serde(default)]
+            speaker: Option<String>,
         }
 
         info!("👂 Cortex Ingress Listening on 'io.user.speak.raw'...");
@@ -344,12 +366,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(payload) = serde_json::from_slice::<RawAudioPayload>(&msg.payload) {
                 let corr_id = Uuid::new_v4();
                 let session_id = "global_session".to_string();
+                let text = voice_prompt_text(&payload.speaker);
 
                 dispatcher_audio.process_envelope(
                     corr_id,
                     &session_id,
                     EventPayload::PromptInbound {
-                        text: "".to_string(),
+                        text,
                         images: vec![],
                         audio: Some(payload.audio),
                         source: None,

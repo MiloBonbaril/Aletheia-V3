@@ -33,12 +33,28 @@ Ce document définit les contrats de données et les flux de messages circulant 
   ```
 
 #### `io.user.speak.raw`
-Événement déclenché par le service `io_oreilles` lors de la détection de parole en mode RAW (`RAW_AUDIO=true`).
+Événement déclenché par le service `io_oreilles` lors de la détection de parole en mode RAW (`RAW_AUDIO=true`) ou en mode Discord (`--discord`).
 - **Payload (JSON) :**
   ```json
   {
     "audio": "base64...",
-    "format": "wav"
+    "format": "wav",
+    "speaker": "Milo (optionnel, présent uniquement en mode --discord)"
+  }
+  ```
+
+---
+
+### 🎙️ Audio Discord (I/O Discord → io_oreilles)
+
+#### `io.discord.voice.frame`
+Chunk de PCM brut d'un locuteur du salon vocal, publié en continu par `io_discord` dès que le bot a rejoint un salon (`/voice join`), tant qu'il y reste. Consommé uniquement par `io_oreilles` lancé avec `--discord` (le flag désactive la capture micro locale pour ce run), qui fait tourner une détection de parole (VAD) indépendante par locuteur (`speaker_id`) — pour qu'une personne qui se tait ne coupe pas la phrase d'une autre. Une fois qu'un segment de parole se termine, il ressort sur `io.user.speak.raw` avec `speaker` renseigné.
+- **Payload (JSON) :**
+  ```json
+  {
+    "speaker_id": "123456789012345678",
+    "speaker_name": "Milo",
+    "pcm": "base64... (s16le, 48kHz, stéréo)"
   }
   ```
 
