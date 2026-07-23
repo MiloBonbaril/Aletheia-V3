@@ -42,3 +42,11 @@ def encode_voice_frame(speaker_id: int, speaker_name: str, pcm: bytes) -> dict:
         "speaker_name": speaker_name,
         "pcm": base64.b64encode(bytes(pcm)).decode(),
     }
+
+
+def decode_speak_audio(payload: dict) -> bytes | None:
+    """Extrait le WAV brut d'un payload `io.voice.speak.audio`, ou None si absent (fragment silencieux)."""
+    audio_b64 = payload.get("audio")
+    if not audio_b64:
+        return None
+    return base64.b64decode(audio_b64)

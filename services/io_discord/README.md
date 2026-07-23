@@ -9,6 +9,7 @@ Ce service implémente un bot Discord servant de passerelle de communication ent
 - **Présence Vocale** : Publie `io.presence.discord_voice` à chaque changement d'occupation des salons vocaux, pour que d'autres services puissent conditionner leur comportement à la présence d'un public.
 - **Capture Vocale (test)** : Commandes slash `/voice join`, `/voice leave`, `/voice record` pour rejoindre un salon vocal et enregistrer un échantillon audio (mp3) de tous les locuteurs présents, afin de vérifier la capture avant de brancher un pipeline en aval.
 - **Streaming Vocal Temps Réel** : Dès `/voice join` réussi, le PCM de chaque locuteur du salon est diffusé en continu sur `io.discord.voice.frame` (identité incluse) pour que `io_oreilles` (lancé avec `--discord`) fasse tourner sa vraie pipeline VAD par locuteur ; `/voice record` met cette diffusion en pause le temps de sa capture manuelle puis la reprend.
+- **Lecture Vocale Temps Réel** : S'abonne à `io.voice.speak.audio` (publié par `io_voix`) et joue chaque fragment audio synthétisé dans le salon vocal actuellement rejoint, dès qu'il arrive — sans passer par un canal texte ni action manuelle. Silencieusement ignoré si le bot n'est dans aucun salon.
 - **Interface Utilisateur** : Permet une interaction asynchrone avec l'entité sans nécessiter d'interface locale.
 
 ## ⚙️ Configuration & Lancement
@@ -16,7 +17,7 @@ Ce service implémente un bot Discord servant de passerelle de communication ent
 ### Dépendances
 - Python 3.10+
 - Bibliothèque `discord.py` (ou équivalent).
-- `ffmpeg` sur le PATH (requis par `/voice record` pour encoder l'audio capturé en mp3).
+- `ffmpeg` sur le PATH (requis par `/voice record` pour encoder l'audio capturé en mp3, et par la lecture vocale pour décoder/rééchantillonner l'audio reçu de `io_voix`).
 
 ### Variables d'Environnement
 - `DISCORD_TOKEN` : Jeton d'authentification du Bot Discord.
@@ -29,7 +30,7 @@ python bot.py
 
 ## 🔌 Interface NATS
 - **Publie sur** : `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`
-- **S'abonne à** : `lobe.fragment_stream`
+- **S'abonne à** : `lobe.fragment_stream`, `io.voice.speak.audio`
 
 ## 🧪 Tests
 ```bash
