@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import logging
 import sys
@@ -9,7 +10,12 @@ from discord import app_commands
 from discord.ext import commands, voice_recv
 
 from config import Config
-from voice import build_recording_attachments, encode_voice_frame, format_recording_summary
+from voice import (
+    build_recording_attachments,
+    decode_speak_audio,
+    encode_voice_frame,
+    format_recording_summary,
+)
 
 
 class _RecordSink(voice_recv.AudioSink):
@@ -90,17 +96,60 @@ class Voice(commands.Cog):
         self.logger.info("Voice cog initialized.")
 
         self.nc = None
+        self.speak_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self.bot.loop.create_task(self.setup_nats())
+        self._playback_task = self.bot.loop.create_task(self._playback_loop())
 
     async def setup_nats(self):
         try:
             self.nc = await nats.connect("nats://localhost:4222")
             self.logger.info("Connected to NATS.")
+            await self.nc.subscribe("io.voice.speak.audio", cb=self._on_speak_audio)
         except Exception as e:
             self.logger.error(f"Failed to connect to NATS: {e}")
 
+    async def _on_speak_audio(self, msg) -> None:
+        try:
+            audio = decode_speak_audio(json.loads(msg.data.decode()))
+            if audio is not None:
+                await self.speak_queue.put(audio)
+        except Exception as e:
+            self.logger.error(f"Failed to handle speak audio: {e}")
+
+    async def _playback_loop(self) -> None:
+        """Plays queued Aletheia audio into whatever channel is currently joined, one
+        fragment at a time — dropped silently if nothing's joined (e.g. still muted/left)."""
+        while True:
+            audio = await self.speak_queue.get()
+            guild = self.bot.get_guild(Config.GUILD_ID)
+            vc = guild.voice_client if guild else None
+            if vc and vc.is_connected():
+                try:
+                    await self._play_and_wait(vc, audio)
+                except Exception as e:
+                    # A disconnect can land between the is_connected() check above and
+                    # vc.play() actually starting — don't let one dropped fragment kill
+                    # playback for the rest of the process.
+                    self.logger.error(f"Failed to play voice fragment: {e}")
+            self.speak_queue.task_done()
+
+    async def _play_and_wait(self, vc: discord.VoiceClient, audio: bytes) -> None:
+        done = asyncio.Event()
+
+        def after(err: Exception | None) -> None:
+            if err:
+                self.logger.error(f"Playback error: {err}")
+            self.bot.loop.call_soon_threadsafe(done.set)
+
+        # ffmpeg auto-detects the WAV header and resamples/upmixes to the
+        # 48kHz stereo s16le Discord voice requires, regardless of io_voix's
+        # native 22050Hz mono — same ffmpeg binary pcm_to_mp3() already relies on.
+        vc.play(discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True), after=after)
+        await done.wait()
+
     def cog_unload(self) -> None:
         self.logger.info("Cleaning up Voice cog resources.")
+        self._playback_task.cancel()
         if self.nc and not self.nc.is_closed:
             self.bot.loop.create_task(self.nc.close())
         self.logger.handlers.clear()

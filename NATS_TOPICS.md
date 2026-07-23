@@ -254,7 +254,7 @@ Publié par `io_voix` juste avant de jouer/publier l'audio d'un fragment synthé
   ```
 
 #### `io.voice.speak.audio`
-Audio synthétisé par `io_voix` pour un fragment, publié entre `io.voice.speak.start` et `io.voice.speak.end`, en plus de (et non à la place de) la lecture locale sur la carte son. Absent pour les fragments sans texte (silence de fin de flux). Permet à d'autres services (ex: un bridge Discord) de recevoir l'audio sans dépendre du haut-parleur local.
+Audio synthétisé par `io_voix` pour un fragment, publié entre `io.voice.speak.start` et `io.voice.speak.end`, en plus de (et non à la place de) la lecture locale sur la carte son. Absent pour les fragments sans texte (silence de fin de flux). Consommé par `io_discord` (cog `voice`), qui rejoue chaque fragment dans le salon vocal actuellement rejoint (ignoré silencieusement si le bot n'est dans aucun salon) — sans dépendre du haut-parleur local de `io_voix`.
 - **Payload (JSON) :**
   ```json
   {

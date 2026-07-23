@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from voice import (
     build_recording_attachments,
+    decode_speak_audio,
     encode_voice_frame,
     format_recording_summary,
     pcm_to_mp3,
@@ -50,3 +51,11 @@ def test_encode_voice_frame_base64_encodes_pcm():
         "speaker_name": "Alice",
         "pcm": "AQI=",
     }
+
+
+def test_decode_speak_audio_decodes_base64_wav():
+    assert decode_speak_audio({"audio": "AQI=", "sequence": 1}) == b"\x01\x02"
+
+
+def test_decode_speak_audio_none_when_audio_absent():
+    assert decode_speak_audio({"sequence": 1, "is_last": True}) is None
