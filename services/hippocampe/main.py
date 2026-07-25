@@ -52,16 +52,13 @@ async def main():
         prompt = data.get("prompt", "")
         correlation_id = data.get("correlation_id", "")
         n_history = data.get("n_history", 20)
-        skip_rag = data.get("skip_rag", False)
 
-        print(f"[Hippocampe] 📥 Context build reçu (corr={correlation_id[:8]}..., prompt_len={len(prompt)}, skip_rag={skip_rag})")
+        print(f"[Hippocampe] 📥 Context build reçu (corr={correlation_id[:8]}..., prompt_len={len(prompt)})")
 
-        # Exécution parallèle des 2 sources de données. RAG (embedding + Qdrant)
-        # est sauté sur demande (typiquement en vocal, où sa latence ne suit pas
-        # la cadence temps réel) — l'appelant en juge, Hippocampe ne fait que suivre.
+        # Exécution parallèle des 2 sources de données.
         history_result, rag_result = await asyncio.gather(
             get_recent_history(n_history),
-            rag_manager.query_memory_async(prompt) if prompt and not skip_rag else _empty_coroutine(),
+            rag_manager.query_memory_async(prompt) if prompt else _empty_coroutine(),
             return_exceptions=True
         )
 
@@ -80,7 +77,16 @@ async def main():
             "context_summary": ""  # Stub pour résumé contextuel futur
         }
 
-        await nc.publish("hippocampe.context.ready", json.dumps(response).encode())
+        # Un échec ici (payload > max_payload NATS, connexion coupée) laissait le Lobe
+        # Frontal attendre son timeout sans trace : on publie au moins un contexte vide,
+        # pour que la génération parte avec un trou de mémoire plutôt qu'avec rien.
+        try:
+            await nc.publish("hippocampe.context.ready", json.dumps(response).encode())
+        except Exception as e:
+            print(f"[Hippocampe] ⚠️ Publication du contexte impossible ({e}), repli sur contexte vide.")
+            await nc.publish("hippocampe.context.ready", json.dumps({
+                "correlation_id": correlation_id, "history": [], "rag_results": "", "context_summary": ""
+            }).encode())
 
         elapsed_ms = (time.perf_counter() - t_start) * 1000
         print(f"[Hippocampe] ✅ Contexte publié (corr={correlation_id[:8]}..., {elapsed_ms:.1f}ms)")

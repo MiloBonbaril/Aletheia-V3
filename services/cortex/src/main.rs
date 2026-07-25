@@ -32,7 +32,6 @@ struct ContextBuildPayload {
     prompt: String,
     correlation_id: String,
     n_history: usize,
-    skip_rag: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -73,11 +72,14 @@ fn voice_prompt_text(speaker: &Option<String>) -> String {
         .unwrap_or_default()
 }
 
-/// Voice-originated prompts (raw audio attached) skip Hippocampe's RAG lookup —
-/// the Qdrant/SentenceTransformers round-trip can't keep pace with real-time
-/// voice conversation, and RAG is only ever useful for the text it's asked about.
-fn should_skip_rag(audio: &Option<String>) -> bool {
-    audio.is_some()
+/// Prompt text for a transcribed voice segment: the transcript, prefixed with the
+/// speaker's name when io_oreilles could attribute it (`--discord`); bare transcript
+/// for local mic audio, which carries no identity.
+fn transcript_prompt_text(speaker: &Option<String>, text: &str) -> String {
+    match speaker {
+        Some(name) => format!("{name}: {text}"),
+        None => text.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -105,13 +107,16 @@ mod tests {
     }
 
     #[test]
-    fn rag_skipped_when_audio_present() {
-        assert!(should_skip_rag(&Some("base64...".to_string())));
+    fn transcript_prompt_text_prefixes_speaker() {
+        assert_eq!(
+            transcript_prompt_text(&Some("Alice".to_string()), "salut ça va"),
+            "Alice: salut ça va"
+        );
     }
 
     #[test]
-    fn rag_kept_when_no_audio() {
-        assert!(!should_skip_rag(&None));
+    fn transcript_prompt_text_bare_without_speaker() {
+        assert_eq!(transcript_prompt_text(&None, "salut ça va"), "salut ça va");
     }
 }
 
@@ -199,7 +204,6 @@ async fn run_dispatcher_worker(
         match event.payload {
             EventPayload::PromptInbound { text, images, audio, source } => {
                 info!("📥 Routing inbound prompt (length: {}, images: {}, has_audio: {}, source: {:?})", text.len(), images.len(), audio.is_some(), source);
-                let skip_rag = should_skip_rag(&audio);
 
                 // Track session start
                 active_sessions.insert(event.session_id.clone(), SessionContext {
@@ -221,7 +225,6 @@ async fn run_dispatcher_worker(
                     prompt: text,
                     correlation_id: corr_id,
                     n_history: 20,
-                    skip_rag,
                 };
 
                 // Dispatch parallèle vers le Lobe Frontal ET l'Hippocampe
@@ -368,7 +371,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 5b. Ingestion Raw Audio -> Dispatcher
+    // 5b. Ingestion Parole transcrite -> Dispatcher
+    let mut speak_subscriber = nats_client.subscribe("io.user.speak").await?;
+    let dispatcher_speak = dispatcher.clone();
+    let _speak_handle = tokio::spawn(async move {
+        #[derive(Deserialize)]
+        struct TranscriptPayload {
+            text: String,
+            #[serde(default)]
+            speaker: Option<String>,
+        }
+
+        info!("👂 Cortex Ingress Listening on 'io.user.speak'...");
+        while let Some(msg) = speak_subscriber.next().await {
+            if let Ok(payload) = serde_json::from_slice::<TranscriptPayload>(&msg.payload) {
+                if payload.text.trim().is_empty() {
+                    continue;
+                }
+                dispatcher_speak.process_envelope(
+                    Uuid::new_v4(),
+                    "global_session",
+                    EventPayload::PromptInbound {
+                        text: transcript_prompt_text(&payload.speaker, &payload.text),
+                        images: vec![],
+                        audio: None,
+                        source: None,
+                    }
+                ).await;
+            } else {
+                warn!("⚠️ Ingression Error: Unsupported transcription format.");
+            }
+        }
+    });
+
+    // 5c. Ingestion Raw Audio -> Dispatcher
     let mut raw_audio_subscriber = nats_client.subscribe("io.user.speak.raw").await?;
     let dispatcher_audio = dispatcher.clone();
     let _audio_handle = tokio::spawn(async move {
