@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 ct2rs = { version = "0.9.18", default-features = false, features = ["whisper", "openblas"] }
+# GPU : `cargo build --release --features cuda`. Compile CTranslate2 avec CUDA
+# (~15 min la première fois). Voir README pour CUDA_ARCH_LIST / CUDAHOSTCXX.
+
 tokio = { version = "1.37", features = ["full"] }
 async-nats = "0.34"
 futures = "0.3"
@@ -19,3 +22,8 @@ rubato = "0.15.0"
 silero = { version = "0.2.0", features = ["bundled"] }
 ort = { version = "=2.0.0-rc.12", features = ["load-dynamic"] }
 base64 = "0.22"
+
+[features]
+# Bascule GPU : le code choisit ct2rs::Device::CUDA quand cette feature est active
+# (cf. stt_device() dans src/main.rs). Sans elle, build CPU/OpenBLAS inchangé.
+cuda = ["ct2rs/cuda"]

@@ -17,6 +17,70 @@ use discord_audio::{stereo_i16_to_mono_f32, DiscordVoiceFrame, SpeakerPipeline};
 #[derive(Serialize)]
 struct TranscriptionEvent {
     text: String,
+    /// Nom du locuteur Discord ; absent pour le micro local (pas d'identité attachée).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker: Option<String>,
+}
+
+/// Le mode brut (audio non transcrit sur `io.user.speak.raw`) ne dépend que de
+/// `RAW_AUDIO`. `--discord` ne l'implique plus : l'audio brut d'un salon vocal
+/// finissait dans l'historique Postgres et faisait dépasser le `max_payload`
+/// NATS sur `hippocampe.context.ready`, bloquant tout le pipeline.
+fn is_raw_mode(raw_audio_env: Option<&str>) -> bool {
+    matches!(raw_audio_env, Some("true") | Some("1"))
+}
+
+/// GPU quand le binaire est compilé avec `--features cuda`, CPU sinon. Le choix est
+/// figé à la compilation : `Device::CUDA` n'existe que si CTranslate2 a été bâti
+/// avec CUDA, un fallback à l'exécution n'aurait rien à quoi retomber.
+fn stt_device() -> ct2rs::Device {
+    #[cfg(feature = "cuda")]
+    {
+        ct2rs::Device::CUDA
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        ct2rs::Device::CPU
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_mode_only_when_env_set() {
+        assert!(is_raw_mode(Some("1")));
+        assert!(is_raw_mode(Some("true")));
+    }
+
+    #[test]
+    fn discord_mode_transcribes_by_default() {
+        // Le drapeau --discord n'entre plus dans la décision : sans RAW_AUDIO, on transcrit.
+        assert!(!is_raw_mode(None));
+        assert!(!is_raw_mode(Some("0")));
+        assert!(!is_raw_mode(Some("false")));
+    }
+
+    #[test]
+    fn transcription_event_omits_speaker_for_local_mic() {
+        let json = serde_json::to_string(&TranscriptionEvent {
+            text: "bonjour".to_string(),
+            speaker: None,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"text":"bonjour"}"#);
+    }
+
+    #[test]
+    fn transcription_event_carries_discord_speaker() {
+        let json = serde_json::to_string(&TranscriptionEvent {
+            text: "bonjour".to_string(),
+            speaker: Some("Milo".to_string()),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"text":"bonjour","speaker":"Milo"}"#);
+    }
 }
 
 fn create_wav_data(samples: &[f32]) -> Vec<u8> {
@@ -386,8 +450,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    let raw_mode = std::env::var("RAW_AUDIO").map(|v| v == "true" || v == "1").unwrap_or(false)
-        || discord_mode;
+    let raw_mode = is_raw_mode(std::env::var("RAW_AUDIO").ok().as_deref());
 
     if raw_mode {
         info!("Running in RAW AUDIO mode. Whisper model will NOT be loaded.");
@@ -423,49 +486,76 @@ async fn main() -> Result<()> {
         info!("Loading STT model...");
         // Initialisation propre d'une structure avec mise à jour des champs qui nous intéressent
         let whisper_config = ct2rs::Config {
-            // 1. Le Métal
-            device: ct2rs::Device::CPU,
-            
+            // 1. Le Métal (GPU si compilé avec --features cuda, cf. stt_device)
+            device: stt_device(),
+
             // 2. Le Moteur Mathématique
-            compute_type: ct2rs::ComputeType::AUTO, 
-            
+            compute_type: ct2rs::ComputeType::AUTO,
+
             // 3. Le Cerveau (L'ex-intra_threads)
-            num_threads_per_replica: 16, 
-            
+            num_threads_per_replica: 16,
+
             // 4. Parallélisme Tensoriel
             tensor_parallel: false,
-            
+
             // 5. Indexation Matérielle
             device_indices: vec![0],
-            
+
             // 6. Gestion Asynchrone Interne
             max_queued_batches: 0,
-            
+
             // 7. Affinité CPU (Pinning)
             cpu_core_offset: -1,
         };
-        let whisper = ct2rs::Whisper::new("model/whisper-small-ct2", whisper_config).unwrap();
+        let model_path = std::env::var("STT_MODEL_PATH")
+            .unwrap_or_else(|_| "model/whisper-small-ct2".to_string());
+        let whisper = ct2rs::Whisper::new(&model_path, whisper_config)
+            .with_context(|| format!("Failed to load Whisper model from {model_path}. See README."))?;
         let whisper_options = ct2rs::WhisperOptions::default();
         let stt_language: Option<String> = std::env::var("STT_LANGUAGE").ok();
-        
-        info!("STT ready (language: {}). Waiting for speech events...", 
-            stt_language.as_deref().unwrap_or("auto-detect"));
-        while let Some((speech, _speaker)) = rx_speech.recv().await {
-            info!("Received speech chunk of len {}", speech.len());
-            let start = std::time::Instant::now();
-            let lang = stt_language.as_deref();
-            match whisper.generate(&speech, lang, false, &whisper_options) {
-                Ok(result) => {
-                    let text = result.join(" ");
-                    info!("Transcribed in {:?}: {}", start.elapsed(), text);
-                    
-                    let event = TranscriptionEvent { text: text.clone() };
-                    let payload = serde_json::to_vec(&event).unwrap();
-                    client.publish("io.user.speak".to_string(), payload.into()).await.unwrap();
+
+        // `whisper.generate` est du calcul synchrone (CPU ou GPU) : le laisser sur la boucle
+        // Tokio bloquait tout le runtime, y compris les publications NATS. En mode Discord,
+        // un VAD par locuteur alimente ce même canal, donc plusieurs segments s'enchaînent.
+        // On le sort donc sur un thread dédié — un seul, la sérialisation reste voulue
+        // (une seule réplique CTranslate2 ; les segments d'un même tour restent ordonnés).
+        // ponytail: thread simple plutôt que pool. Plafond assumé : un locuteur B attend la
+        // fin de la transcription du locuteur A. Passer à N répliques si ça se voit.
+        let (tx_text, mut rx_text) = mpsc::channel::<(String, Option<String>)>(32);
+        std::thread::spawn(move || {
+            info!("STT ready (language: {}). Waiting for speech events...",
+                stt_language.as_deref().unwrap_or("auto-detect"));
+            while let Some((speech, speaker)) = rx_speech.blocking_recv() {
+                info!("Received speech chunk of len {}", speech.len());
+                let start = std::time::Instant::now();
+                let lang = stt_language.as_deref();
+                match whisper.generate(&speech, lang, false, &whisper_options) {
+                    Ok(result) => {
+                        let text = result.join(" ");
+                        info!("Transcribed in {:?}: {}", start.elapsed(), text);
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        if tx_text.blocking_send((text, speaker)).is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Whisper transcription failed: {}. Try setting STT_LANGUAGE=fr (or en, etc.)", e);
+                    }
                 }
-                Err(e) => {
-                    error!("Whisper transcription failed: {}. Try setting STT_LANGUAGE=fr (or en, etc.)", e);
+            }
+        });
+
+        while let Some((text, speaker)) = rx_text.recv().await {
+            let event = TranscriptionEvent { text, speaker };
+            match serde_json::to_vec(&event) {
+                Ok(payload) => {
+                    if let Err(e) = client.publish("io.user.speak".to_string(), payload.into()).await {
+                        error!("Failed to publish transcription: {:?}", e);
+                    }
                 }
+                Err(e) => error!("Failed to serialize transcription event: {:?}", e),
             }
         }
     }

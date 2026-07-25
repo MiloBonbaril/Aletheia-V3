@@ -61,6 +61,28 @@ async def add_message(role: str, content):
             print(f"Error adding message to db: {e}")
             await db.rollback()
 
+def _strip_audio_blobs(content: list) -> list:
+    """Remplace tout `input_audio` de l'historique par un marqueur textuel.
+
+    Le WAV base64 d'un tour vocal pèse ~150 Ko : vingt tours dépassaient le
+    `max_payload` NATS (1 Mo) et `hippocampe.context.ready` n'était jamais publié,
+    laissant le Lobe Frontal expirer sur chaque message — définitivement, puisque
+    l'échec empêchait aussi d'écrire de nouvelles lignes qui auraient fait défiler
+    la fenêtre. Le mode nominal transcrit désormais (cf. io.user.speak) ; ce filtre
+    couvre les lignes historiques et le mode RAW_AUDIO.
+
+    Côté lecture plutôt qu'écriture : rétroactif sur les lignes déjà en base, et
+    l'audio reste stocké si on veut un jour le retranscrire.
+    """
+    stripped = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "input_audio":
+            stripped.append({"type": "text", "text": "[message vocal]"})
+        else:
+            stripped.append(item)
+    return stripped
+
+
 async def get_recent_history(n: int = 10):
     async with AsyncSessionLocal() as db:
         try:
@@ -77,6 +99,7 @@ async def get_recent_history(n: int = 10):
                             j["text"] = prefix + j["text"] if prefix else j["text"]
                             return j
                         elif isinstance(j, list):
+                            j = _strip_audio_blobs(j)
                             if prefix and len(j) > 0 and isinstance(j[0], dict) and j[0].get("type") == "text":
                                 j[0]["text"] = prefix + j[0]["text"]
                             return j

@@ -23,23 +23,23 @@ Ce document définit les contrats de données et les flux de messages circulant 
   ```
 
 #### `io.user.speak`
-Événement déclenché par le pipeline STT (`io_oreilles`) lors de la détection d'une phrase complète (mode Whisper).
+Événement déclenché par le pipeline STT (`io_oreilles`) lors de la détection d'une phrase complète (mode Whisper), micro local **comme** salon vocal Discord (`--discord`). Consommé par le Cortex, qui préfixe le transcript du nom du locuteur quand il est présent.
 - **Payload (JSON) :**
   ```json
   {
     "text": "Contenu transcrit par Whisper",
-    "confidence": 0.98
+    "speaker": "Milo (optionnel, présent uniquement en mode --discord)"
   }
   ```
 
 #### `io.user.speak.raw`
-Événement déclenché par le service `io_oreilles` lors de la détection de parole en mode RAW (`RAW_AUDIO=true`) ou en mode Discord (`--discord`).
+Événement déclenché par le service `io_oreilles` uniquement en mode RAW (`RAW_AUDIO=true`) : l'audio part tel quel vers le LLM, sans transcription. Le mode Discord ne l'emprunte plus — il transcrit (cf. `io.user.speak`), car l'audio brut finissait dans l'historique et faisait dépasser le `max_payload` NATS sur `hippocampe.context.ready`.
 - **Payload (JSON) :**
   ```json
   {
     "audio": "base64...",
     "format": "wav",
-    "speaker": "Milo (optionnel, présent uniquement en mode --discord)"
+    "speaker": "Milo (optionnel)"
   }
   ```
 
@@ -89,14 +89,13 @@ L'ordre d'inférence envoyé par le Cortex au Lobe Frontal. Inclut un `correlati
   ```
 
 #### `hippocampe.context.build`
-Demande de construction de contexte envoyée par le Cortex à l'Hippocampe. Déclenche la récupération parallèle de l'historique PostgreSQL et de la recherche RAG Qdrant, sauf si `skip_rag` est vrai (mis par le Cortex dès qu'un `PromptInbound` porte de l'audio, c-à-d une origine vocale — le round-trip embedding+Qdrant ne suit pas la cadence temps réel de la conversation vocale).
+Demande de construction de contexte envoyée par le Cortex à l'Hippocampe. Déclenche la récupération parallèle de l'historique PostgreSQL et de la recherche RAG Qdrant.
 - **Payload (JSON) :**
   ```json
   {
     "prompt": "Texte du message utilisateur",
     "correlation_id": "uuid-v4",
-    "n_history": 20,
-    "skip_rag": false
+    "n_history": 20
   }
   ```
 
