@@ -28,7 +28,9 @@ from openai import AsyncOpenAI
 from rich.console import Console
 from rich.table import Table
 
-from eval.fixtures import SCENARIO_ORDER, config_hashes, load_scenarios
+from eval.fixtures import (SCENARIO_ORDER, build_messages, config_hashes,
+                           load_scenarios, typique_context)
+from eval.quality import CONTROLS, blind_sheet, disqualifications, rates
 from eval.stream import consume_stream
 from src.prompt_builder import PromptBuilder
 
@@ -93,12 +95,15 @@ def sampling_settings(cfg: dict) -> dict:
         "enable_thinking": ENABLE_THINKING,
         "seed": cfg.get("seed", 1337),
         "max_tokens": cfg.get("max_tokens", 200),
-        "cache_prompt": False,
+        "cache_prompt": {"vitesse": False, "qualite": True},
+        # Le seed varie sur le groupe `qualité` : fixe, il rejouerait cinq fois
+        # la même réponse et le taux ne mesurerait rien.
+        "quality_seeds": list(range(1, cfg.get("quality_runs", 5) + 1)),
     }
 
 
 async def one_run(client: AsyncOpenAI, model: str, messages: list[dict], tools: list[dict],
-                  cfg: dict, seed: int) -> dict:
+                  cfg: dict, seed: int, cache_prompt: bool = False) -> dict:
     start = time.monotonic()
     stream = await client.chat.completions.create(
         messages=messages,
@@ -112,23 +117,45 @@ async def one_run(client: AsyncOpenAI, model: str, messages: list[dict], tools: 
         seed=seed,
         reasoning_effort=REASONING_EFFORT,
         extra_body={
-            # Sans ça, llama.cpp réutilise le préfixe KV du run précédent : on
-            # mesurerait son cache, pas le modèle. Le groupe `qualité` (#23) le
-            # repassera à true — il ne chronomètre rien.
-            "cache_prompt": False,
+            # false sur les scénarios de vitesse : sinon llama.cpp réutilise le
+            # préfixe KV du run précédent et on mesure son cache, pas le modèle.
+            # true sur le groupe `qualité`, qui ne chronomètre rien et dont les
+            # 6 prompts partagent le même préfixe — quelques dizaines de secondes
+            # par modèle au lieu de plusieurs minutes.
+            "cache_prompt": cache_prompt,
             "chat_template_kwargs": {"enable_thinking": ENABLE_THINKING},
         },
     )
     return await consume_stream(stream, start)
 
 
-async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder,
-                      scenarios: dict) -> tuple[list[dict], list[dict]]:
-    """Retourne (runs, failures). Un candidat qui casse ne tue jamais le banc,
-    et un scénario qui casse n'invalide pas les scénarios déjà mesurés."""
+async def run_quality_group(client: AsyncOpenAI, model: str, cfg: dict, pb: PromptBuilder,
+                            tools: list[dict], ctx: tuple[list[dict], str]) -> list[dict]:
+    """Les 6 contrôles, 5 runs chacun, montés sur le contexte de `typique`.
+
+    Seed variable et échantillonnage de production : c'est la fiabilité sous
+    stochasticité réelle qu'on mesure, pas une réponse chanceuse rejouée.
+    """
+    history, rag_results = ctx
+    runs = []
+    console.print("  · groupe [magenta]qualité[/magenta] :", end="")
+    for control in CONTROLS:
+        messages = build_messages(pb, control["prompt"], history, rag_results)
+        for seed in range(1, cfg.get("quality_runs", 5) + 1):
+            result = await one_run(client, model, messages, tools, cfg, seed, cache_prompt=True)
+            runs.append({"model": model, "control": control["id"], "seed": seed, **result})
+        console.print(f" {control['id']}", end="")
+    console.print()
+    return runs
+
+
+async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder, scenarios: dict,
+                      quality_ctx: tuple | None) -> tuple[list[dict], list[dict], list[dict]]:
+    """Retourne (runs, quality_runs, failures). Un candidat qui casse ne tue
+    jamais le banc, et un scénario qui casse n'invalide pas les précédents."""
     name, argv = entry["name"], entry["argv"]
     port = port_from_argv(argv)
-    runs, failures, proc, client = [], [], None, None
+    runs, quality_runs, failures, proc, client = [], [], [], None, None
     log = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
 
     def log_tail() -> str:
@@ -172,14 +199,23 @@ async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder,
                                  "error": str(e), "server_log_tail": log_tail()})
                 if proc.poll() is not None:
                     failures[-1]["error"] += " (serveur mort, scénarios suivants abandonnés)"
-                    break
-        return runs, failures
+                    return runs, quality_runs, failures
+
+        if quality_ctx and proc.poll() is None:
+            try:
+                quality_runs.extend(
+                    await run_quality_group(client, name, cfg, pb, tools, quality_ctx))
+            except Exception as e:
+                console.print(f"\n[red]  ✗ qualité : {e}[/red]")
+                failures.append({"model": name, "argv": argv, "scenario": "qualité",
+                                 "error": str(e), "server_log_tail": log_tail()})
+        return runs, quality_runs, failures
 
     except Exception as e:
         console.print(f"[red]✗ {name} : {e}[/red]")
         failures.append({"model": name, "argv": argv, "scenario": None,
                          "error": str(e), "server_log_tail": log_tail()})
-        return runs, failures
+        return runs, quality_runs, failures
 
     finally:
         if client:
@@ -247,6 +283,36 @@ def render(runs: list[dict], failures: list[dict]) -> None:
     console.print("[dim]Pas de score composite : arbitrer TTFF contre fiabilité, c'est ta décision.[/dim]")
 
 
+def render_quality(quality_runs: list[dict], speed_runs: list[dict]) -> None:
+    if not quality_runs:
+        return
+    table = Table(title="Groupe qualité — taux de réussite sur 5 runs, seed variable")
+    table.add_column("Modèle")
+    for control in CONTROLS:
+        if control["check"] is not None:
+            table.add_column(control["id"], justify="right")
+    table.add_column("Éliminatoire", style="red")
+
+    for model in dict.fromkeys(r["model"] for r in quality_runs):
+        model_runs = [r for r in quality_runs if r["model"] == model]
+        model_rates = rates(model_runs)
+        cells = []
+        for control in CONTROLS:
+            if control["check"] is None:
+                continue
+            ok, total = model_rates.get(control["id"], (0, 0))
+            # Un taux partiel se lit à l'œil : plein en vert, nul en rouge, le
+            # reste en jaune — c'est l'erratique qu'on cherche à repérer.
+            colour = "green" if total and ok == total else ("red" if ok == 0 else "yellow")
+            cells.append(f"[{colour}]{ok}/{total}[/{colour}]" if total else "—")
+        # Les runs de vitesse comptent aussi pour les drapeaux : une fuite du
+        # prompt système y est aussi disqualifiante qu'ailleurs.
+        flags = disqualifications(model_runs + [r for r in speed_runs if r["model"] == model])
+        table.add_row(model, *cells, ", ".join(flags) if flags else "")
+    console.print(table)
+    console.print("[dim]`piege` n'a pas de vérification automatique : il part en notation aveugle.[/dim]")
+
+
 async def main() -> None:
     config_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CONFIG
     with open(config_path, encoding="utf-8") as f:
@@ -261,14 +327,25 @@ async def main() -> None:
         console.print("[yellow]⚠ Les fixtures ont été dumpées avec un autre message final : "
                       "leur <recall> ne correspond plus. Redumpe-les.[/yellow]")
 
-    runs, failures = [], []
+    # Le groupe `qualité` se monte sur le contexte de `typique` : sans fixtures,
+    # il n'a pas de conditions réelles où jouer, donc il ne joue pas.
+    quality_ctx = typique_context()
+    if quality_ctx is None and fixture_meta is not None:
+        console.print("[yellow]⚠ Fixture sans scénario `typique` : groupe qualité ignoré.[/yellow]")
+
+    runs, quality_runs, failures = [], [], []
     for entry in cfg["models"]:
-        model_runs, model_failures = await bench_model(entry, cfg, pb, scenarios)
+        model_runs, model_quality, model_failures = await bench_model(
+            entry, cfg, pb, scenarios, quality_ctx)
         runs.extend(model_runs)
+        quality_runs.extend(model_quality)
         failures.extend(model_failures)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    out = os.path.join(RESULTS_DIR, f"{datetime.now():%Y-%m-%d_%H%M%S}.json")
+    stamp = f"{datetime.now():%Y-%m-%d_%H%M%S}"
+    out = os.path.join(RESULTS_DIR, f"{stamp}.json")
+
+    sheet, blind_labels = blind_sheet(quality_runs) if quality_runs else ("", {})
     with open(out, "w", encoding="utf-8") as f:
         json.dump({
             "config": cfg,
@@ -279,11 +356,22 @@ async def main() -> None:
             "config_hashes": config_hashes(),
             "fixtures": fixture_meta,
             "runs": runs,
+            "quality_runs": quality_runs,
+            # La correspondance vit ici et pas dans la feuille : elle doit être
+            # récupérable après notation, pas pendant.
+            "blind_labels": blind_labels,
             "failures": failures,
         }, f, ensure_ascii=False, indent=2)
 
     render(runs, failures)
+    render_quality(quality_runs, runs)
     console.print(f"[dim]→ {out}[/dim]")
+
+    if sheet:
+        blind_out = os.path.join(RESULTS_DIR, f"{stamp}-blind.md")
+        with open(blind_out, "w", encoding="utf-8") as f:
+            f.write(sheet)
+        console.print(f"[dim]→ {blind_out}  (à noter avant d'ouvrir le JSON)[/dim]")
 
 
 if __name__ == "__main__":
