@@ -96,6 +96,23 @@ def test_tool_call_split_across_chunks_is_reassembled():
     assert result["ttff"] is None
 
 
+def test_trailing_text_before_a_tool_call_is_not_counted_as_a_fragment():
+    result = run(
+        [
+            chunk("Laisse-moi vérifier"),
+            chunk(tool_calls=[tool_chunk(id="c", name="get_from_memory", arguments="{}")]),
+            chunk(finish_reason="tool_calls"),
+        ],
+        ticks=[0.2, 0.3, 0.4],
+    )
+    # main.py garde ce reste pour le tour suivant au lieu de le publier : le
+    # flusher ici donnerait un TTFF que la production ne produit jamais.
+    assert result["fragments"] == []
+    assert result["ttff"] is None
+    assert result["ttft"] == pytest.approx(0.2)
+    assert result["text"] == "Laisse-moi vérifier"
+
+
 def test_parallel_tool_calls_stay_separated_by_index():
     result = run(
         [

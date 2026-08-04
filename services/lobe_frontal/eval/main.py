@@ -41,7 +41,10 @@ DEFAULT_CONFIG = os.path.join(EVAL_DIR, "models.json")
 # qu'il tournera (cf. .env de lobe_frontal), pas dans un mode greedy flatteur.
 TEMPERATURE = float(os.getenv("TEMPERATURE", 0.9))
 TOP_P = float(os.getenv("TOP_P", 0.95))
-REASONING_EFFORT = os.getenv("REASONING_EFFORT", "none")
+# Mêmes défauts que main.py : un fallback qui diverge ferait mesurer un réglage
+# que la production n'utilise pas.
+REASONING_EFFORT = os.getenv("REASONING_EFFORT", "default")
+ENABLE_THINKING = str(REASONING_EFFORT).strip().lower() != "none"
 
 BOOT_TIMEOUT = 300.0
 console = Console()
@@ -92,8 +95,22 @@ async def port_is_busy(port: int) -> bool:
             return False
 
 
+def sampling_settings(cfg: dict) -> dict:
+    """Tout ce qui influe sur ce qui a réellement tourné, recopié dans le rapport :
+    l'argv seul ne suffit pas, ces réglages-là viennent du .env de lobe_frontal."""
+    return {
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+        "reasoning_effort": REASONING_EFFORT,
+        "enable_thinking": ENABLE_THINKING,
+        "seed": cfg.get("seed", 1337),
+        "max_tokens": cfg.get("max_tokens", 200),
+        "cache_prompt": False,
+    }
+
+
 async def one_run(client: AsyncOpenAI, model: str, messages: list[dict], tools: list[dict],
-                  cfg: dict, cache_prompt: bool, seed: int) -> dict:
+                  cfg: dict, seed: int) -> dict:
     start = time.monotonic()
     stream = await client.chat.completions.create(
         messages=messages,
@@ -108,9 +125,10 @@ async def one_run(client: AsyncOpenAI, model: str, messages: list[dict], tools: 
         reasoning_effort=REASONING_EFFORT,
         extra_body={
             # Sans ça, llama.cpp réutilise le préfixe KV du run précédent : on
-            # mesurerait son cache, pas le modèle.
-            "cache_prompt": cache_prompt,
-            "chat_template_kwargs": {"enable_thinking": str(REASONING_EFFORT).strip().lower() != "none"},
+            # mesurerait son cache, pas le modèle. Le groupe `qualité` (#23) le
+            # repassera à true — il ne chronomètre rien.
+            "cache_prompt": False,
+            "chat_template_kwargs": {"enable_thinking": ENABLE_THINKING},
         },
     )
     return await consume_stream(stream, start)
@@ -141,9 +159,9 @@ async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder) -> tuple[list[d
         for scenario, build in SCENARIOS.items():
             console.print(f"  · scénario [cyan]{scenario}[/cyan] : chauffe…", end="")
             # Run de chauffe jeté : il paie le premier accès disque/VRAM.
-            await one_run(client, name, build(pb), tools, cfg, cache_prompt=False, seed=seed)
+            await one_run(client, name, build(pb), tools, cfg, seed)
             for i in range(cfg.get("runs", 5)):
-                result = await one_run(client, name, build(pb), tools, cfg, cache_prompt=False, seed=seed)
+                result = await one_run(client, name, build(pb), tools, cfg, seed)
                 runs.append({"model": name, "argv": argv, "scenario": scenario, "run": i, **result})
                 ttff = result["ttff"]
                 console.print(" " + (f"{ttff * 1000:.0f}ms" if ttff else "—"), end="")
@@ -207,6 +225,11 @@ def render(runs: list[dict], failures: list[dict]) -> None:
         )
     console.print(table)
 
+    # L'argv sous le tableau, pas dedans : deux modèles mesurés avec des flags
+    # différents ne sont pas comparables, et la ligne fait 100 caractères.
+    for model, argv in {r["model"]: r["argv"] for r in runs}.items():
+        console.print(f"[dim]{model} :[/dim] {' '.join(argv)}")
+
     for f in failures:
         console.print(f"[red]✗ {f['model']}[/red] : {f['error']}")
     console.print("[dim]Pas de score composite : arbitrer TTFF contre fiabilité, c'est ta décision.[/dim]")
@@ -228,7 +251,8 @@ async def main() -> None:
     os.makedirs(RESULTS_DIR, exist_ok=True)
     out = os.path.join(RESULTS_DIR, f"{datetime.now():%Y-%m-%d_%H%M%S}.json")
     with open(out, "w", encoding="utf-8") as f:
-        json.dump({"config": cfg, "runs": runs, "failures": failures}, f, ensure_ascii=False, indent=2)
+        json.dump({"config": cfg, "sampling": sampling_settings(cfg), "runs": runs, "failures": failures},
+                  f, ensure_ascii=False, indent=2)
 
     render(runs, failures)
     console.print(f"[dim]→ {out}[/dim]")
