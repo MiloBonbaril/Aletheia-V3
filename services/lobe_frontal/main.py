@@ -1,5 +1,4 @@
 import os
-import re
 import json
 import nats
 import time
@@ -20,12 +19,12 @@ logger = logging.getLogger("LobeFrontal")
 from dotenv import load_dotenv
 from OpenAI.interface import OpenAIInterface
 from src.prompt_builder import PromptBuilder
+from src.fragments import PUNCTUATION_PATTERN
 from tui import LobeTUI
 
 load_dotenv()
 
 nc = None
-PUNCTUATION_PATTERN = re.compile(r'([.!?\n]+)')
 INFERENCE_SEMAPHORE = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_INFERENCE", "1")))
 MAX_TOOL_ITERATIONS = 10
 
