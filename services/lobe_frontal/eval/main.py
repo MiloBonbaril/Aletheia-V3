@@ -2,12 +2,22 @@
 
 Banc isolé — HTTP direct vers llama.cpp, ni NATS, ni cortex, ni hippocampe
 (ADR 0002 : on reste sur llama.cpp local). Pour chaque modèle du fichier de
-config : spawn de llama-server, attente de /health, scénarios, arrêt, suivant.
+config : spawn de llama-server, attente de /health, scénarios de vitesse, groupe
+`qualité`, arrêt, suivant.
 
     python -m eval.main [config.json]      # depuis services/lobe_frontal/
 
+Sorties : deux tableaux `rich` (vitesse, qualité), `results/<date>.json` brut, et
+`results/<date>-blind.md` — les réponses anonymisées à noter à la main avant
+d'ouvrir le JSON, qui contient la correspondance.
+
+Les scénarios `typique`/`chargé` et le groupe `qualité` demandent les fixtures
+d'historique (`python eval/dump_history.py`, non versionnées) ; sans elles le
+banc mesure `froid` seul.
+
 Le tableau final donne des chiffres bruts, pas de score composite : pondérer le
-TTFF contre la fiabilité des outils, c'est la décision produit elle-même.
+TTFF contre la fiabilité des outils, c'est la décision produit elle-même. Les
+drapeaux éliminatoires sont la seule chose que le harnais tranche seul.
 """
 
 import asyncio
@@ -30,7 +40,8 @@ from rich.table import Table
 
 from eval.fixtures import (SCENARIO_ORDER, build_messages, config_hashes,
                            load_scenarios, typique_context)
-from eval.quality import CONTROLS, blind_sheet, disqualifications, rates
+from eval.quality import (CONTROLS, QUALITY_RUNS, UNCHECKED_CONTROL_IDS, blind_sheet,
+                          disqualifications, rates)
 from eval.stream import consume_stream
 from src.prompt_builder import PromptBuilder
 
@@ -50,6 +61,9 @@ REASONING_EFFORT = os.getenv("REASONING_EFFORT", "default")
 ENABLE_THINKING = str(REASONING_EFFORT).strip().lower() != "none"
 
 BOOT_TIMEOUT = 300.0
+# Une seule définition : le rapport ne peut pas annoncer des seeds que les runs
+# n'ont pas utilisés.
+QUALITY_SEEDS = list(range(1, QUALITY_RUNS + 1))
 console = Console()
 
 
@@ -95,10 +109,10 @@ def sampling_settings(cfg: dict) -> dict:
         "enable_thinking": ENABLE_THINKING,
         "seed": cfg.get("seed", 1337),
         "max_tokens": cfg.get("max_tokens", 200),
-        "cache_prompt": {"vitesse": False, "qualite": True},
+        "cache_prompt": {"speed": False, "quality": True},
         # Le seed varie sur le groupe `qualité` : fixe, il rejouerait cinq fois
         # la même réponse et le taux ne mesurerait rien.
-        "quality_seeds": list(range(1, cfg.get("quality_runs", 5) + 1)),
+        "quality_seeds": QUALITY_SEEDS,
     }
 
 
@@ -141,7 +155,7 @@ async def run_quality_group(client: AsyncOpenAI, model: str, cfg: dict, pb: Prom
     console.print("  · groupe [magenta]qualité[/magenta] :", end="")
     for control in CONTROLS:
         messages = build_messages(pb, control["prompt"], history, rag_results)
-        for seed in range(1, cfg.get("quality_runs", 5) + 1):
+        for seed in QUALITY_SEEDS:
             result = await one_run(client, model, messages, tools, cfg, seed, cache_prompt=True)
             runs.append({"model": model, "control": control["id"], "seed": seed, **result})
         console.print(f" {control['id']}", end="")
@@ -285,6 +299,13 @@ def render(runs: list[dict], failures: list[dict]) -> None:
 
 def render_quality(quality_runs: list[dict], speed_runs: list[dict]) -> None:
     if not quality_runs:
+        # Sans fixtures, le groupe qualité ne tourne pas — mais une fuite du
+        # prompt système dans les scénarios de vitesse disqualifie quand même,
+        # et c'est justement là qu'on en a observé une.
+        for model in dict.fromkeys(r["model"] for r in speed_runs):
+            flags = disqualifications([r for r in speed_runs if r["model"] == model])
+            if flags:
+                console.print(f"[red]⛔ {model} · éliminatoire[/red] : {', '.join(flags)}")
         return
     table = Table(title="Groupe qualité — taux de réussite sur 5 runs, seed variable")
     table.add_column("Modèle")
@@ -310,7 +331,8 @@ def render_quality(quality_runs: list[dict], speed_runs: list[dict]) -> None:
         flags = disqualifications(model_runs + [r for r in speed_runs if r["model"] == model])
         table.add_row(model, *cells, ", ".join(flags) if flags else "")
     console.print(table)
-    console.print("[dim]`piege` n'a pas de vérification automatique : il part en notation aveugle.[/dim]")
+    unchecked = ", ".join(f"`{c}`" for c in UNCHECKED_CONTROL_IDS)
+    console.print(f"[dim]{unchecked} : pas de vérification automatique, en notation aveugle seulement.[/dim]")
 
 
 async def main() -> None:
@@ -345,7 +367,8 @@ async def main() -> None:
     stamp = f"{datetime.now():%Y-%m-%d_%H%M%S}"
     out = os.path.join(RESULTS_DIR, f"{stamp}.json")
 
-    sheet, blind_labels = blind_sheet(quality_runs) if quality_runs else ("", {})
+    # Graine dérivée de l'horodatage : les étiquettes changent à chaque campagne.
+    sheet, blind_labels = blind_sheet(quality_runs, stamp) if quality_runs else ("", {})
     with open(out, "w", encoding="utf-8") as f:
         json.dump({
             "config": cfg,

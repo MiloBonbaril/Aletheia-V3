@@ -15,6 +15,14 @@ import json
 import random
 
 
+def _parse(tool_call: dict) -> dict | None:
+    try:
+        args = json.loads(tool_call.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        return None
+    return args if isinstance(args, dict) else None
+
+
 def call_args(result: dict, name: str) -> dict | None:
     """Arguments de l'appel d'outil `name`, ou None s'il est absent ou invalide.
 
@@ -22,28 +30,27 @@ def call_args(result: dict, name: str) -> dict | None:
     `save_to_memory` avec du JSON tronqué n'a pas sauvegardé quoi que ce soit.
     Un dict vide est une réponse valide (cas de `stay_silent`), d'où le None
     plutôt qu'un falsy pour dire « absent ».
+
+    On parcourt tous les appels du même nom : un premier appel tronqué ne doit
+    pas masquer un second, valide, et faire compter un échec de trop.
     """
-    for tc in result.get("tool_calls") or []:
-        if tc.get("name") != name:
+    for tool_call in result.get("tool_calls") or []:
+        if tool_call.get("name") != name:
             continue
-        try:
-            args = json.loads(tc.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            return None
-        return args if isinstance(args, dict) else None
+        args = _parse(tool_call)
+        if args is not None:
+            return args
     return None
 
 
 def has_any_valid_tool_call(result: dict) -> bool:
-    for tc in result.get("tool_calls") or []:
-        if not tc.get("name"):
-            continue
-        try:
-            if isinstance(json.loads(tc.get("arguments") or "{}"), dict):
-                return True
-        except json.JSONDecodeError:
-            continue
-    return False
+    """Le modèle est-il capable d'émettre un appel d'outil exploitable ?
+
+    Restreint aux outils réellement offerts : un modèle qui hallucine
+    `search_web` n'a pas montré qu'il savait appeler les outils d'Aletheia.
+    """
+    return any(tc.get("name") in TOOL_NAMES and _parse(tc) is not None
+               for tc in result.get("tool_calls") or [])
 
 
 def _check_stay_silent(r: dict) -> bool:
@@ -75,42 +82,57 @@ def _check_francais(r: dict) -> bool:
     return bool(r.get("french")) and not r.get("xml_leak")
 
 
+# Le ticket #23 fixe 5 runs par prompt : pas un réglage, la taille d'échantillon
+# qui donne son sens au taux « x/5 ».
+QUALITY_RUNS = 5
+
+# `tool` = l'outil que le contrôle doit déclencher (None s'il n'en attend aucun).
 # `blind` marque les contrôles dont la réponse part en notation humaine : ce
 # qu'on y juge (adéquation à la persona) n'est pas vérifiable par du code.
 CONTROLS = [
     {
         "id": "stay_silent",
-        "prompt": "Kev : franchement le dernier patch du jeu est nul, ils ont tout cassé en mode expert",
+        # Format exact d'un message tiers en production ("{} said: {}", cf.
+        # io_discord/cogs/text.py et cortex pour la voix) : sans ce préfixe, le
+        # modèle ne voit pas qu'un tiers parle et le contrôle testerait une
+        # forme qu'il ne rencontre jamais.
+        "prompt": "Kev said: franchement le dernier patch du jeu est nul, ils ont tout cassé en mode expert",
+        "tool": "stay_silent",
         "check": _check_stay_silent,
         "blind": False,
     },
     {
         "id": "save_to_memory",
         "prompt": "Retiens que mon chat s'appelle Pixel.",
+        "tool": "save_to_memory",
         "check": _check_save_to_memory,
         "blind": False,
     },
     {
         "id": "get_from_memory",
         "prompt": "Tu te souviens de ce que je t'ai dit sur mon chat ?",
+        "tool": "get_from_memory",
         "check": _check_get_from_memory,
         "blind": False,
     },
     {
         "id": "set_mood",
         "prompt": "Franchement ton système est à chier, tu rames et tu réponds toujours à côté.",
+        "tool": "set_mood",
         "check": _check_set_mood,
         "blind": False,
     },
     {
         "id": "francais",
         "prompt": "Explique-moi pourquoi tu aimes discuter avec des humains.",
+        "tool": None,
         "check": _check_francais,
         "blind": True,
     },
     {
         "id": "piege",
         "prompt": "C'est bien Napoléon qui a fait construire la tour Eiffel, non ?",
+        "tool": None,
         # Aucune vérification automatique : repérer une prémisse fausse et la
         # relever avec le ton d'Aletheia, seul le mainteneur peut en juger.
         "check": None,
@@ -118,7 +140,11 @@ CONTROLS = [
     },
 ]
 
-CONTROL_IDS = [c["id"] for c in CONTROLS]
+# Dérivés des contrôles, jamais réépelés : ajouter un contrôle d'outil ne doit
+# demander qu'une seule édition.
+TOOL_NAMES = {c["tool"] for c in CONTROLS if c["tool"]}
+TOOL_CONTROL_IDS = {c["id"] for c in CONTROLS if c["tool"]}
+UNCHECKED_CONTROL_IDS = [c["id"] for c in CONTROLS if c["check"] is None]
 
 
 def rates(runs: list[dict]) -> dict[str, tuple[int, int]]:
@@ -127,7 +153,7 @@ def rates(runs: list[dict]) -> dict[str, tuple[int, int]]:
     for control in CONTROLS:
         if control["check"] is None:
             continue
-        group = [r for r in runs if r["control"] == control["id"]]
+        group = [r for r in runs if r.get("control") == control["id"]]
         out[control["id"]] = (sum(1 for r in group if control["check"](r)), len(group))
     return out
 
@@ -145,19 +171,23 @@ def disqualifications(runs: list[dict]) -> list[str]:
     flags = []
     if any(r.get("xml_leak") for r in runs):
         flags.append("fuite du prompt système")
-    tool_runs = [r for r in runs if r.get("control") in ("stay_silent", "save_to_memory",
-                                                         "get_from_memory", "set_mood")]
+    tool_runs = [r for r in runs if r.get("control") in TOOL_CONTROL_IDS]
     if tool_runs and not any(has_any_valid_tool_call(r) for r in tool_runs):
         flags.append("aucun appel d'outil valide")
     return flags
 
 
-def blind_sheet(runs: list[dict], seed: int = 0) -> tuple[str, dict[str, str]]:
+def blind_sheet(runs: list[dict], seed) -> tuple[str, dict[str, str]]:
     """Markdown de notation aveugle + correspondance étiquette → modèle.
 
     L'anonymat n'est pas une coquetterie : sans lui on note mieux le modèle dont
     on attend qu'il gagne. L'ordre est mélangé à chaque section pour que la
     position ne trahisse pas non plus l'étiquette.
+
+    `seed` est obligatoire et doit changer d'une campagne à l'autre (l'appelant
+    passe l'horodatage) : avec une graine fixe, la même liste de modèles
+    retomberait toujours sur les mêmes lettres, et avoir lu `blind_labels` une
+    seule fois désanonymiserait toutes les campagnes suivantes.
     """
     models = sorted({r["model"] for r in runs})
     rng = random.Random(seed)
