@@ -40,3 +40,5 @@ services/io_voix/models
 
 # Mesures brutes du banc d'eval (spécifiques à la machine, pas au dépôt)
 services/lobe_frontal/eval/results/
+# Dump d'historique réel : conversations Discord de tiers, dépôt public
+services/lobe_frontal/eval/fixtures/
