@@ -25,6 +25,26 @@ def test_a_tool_call_with_broken_json_arguments_does_not_count():
     assert has_any_valid_tool_call(truncated) is False
 
 
+def test_a_truncated_call_does_not_mask_a_valid_one_with_the_same_name():
+    # Deux appels au même outil, le premier tronqué : compter l'échec ici
+    # sous-estimerait le taux d'un modèle qui a bien fini par sauvegarder.
+    r = run("save_to_memory")
+    r["tool_calls"] = [
+        {"id": "a", "name": "save_to_memory", "arguments": '{"text": "mon chat s\'appelle Pi'},
+        {"id": "b", "name": "save_to_memory", "arguments": '{"text": "son chat s\'appelle Pixel"}'},
+    ]
+    assert CHECKS["save_to_memory"](r) is True
+
+
+def test_a_hallucinated_tool_name_is_not_a_valid_tool_call():
+    # « Incapable d'émettre un appel valide » porte sur les outils d'Aletheia :
+    # inventer search_web ne prouve rien.
+    r = run("set_mood")
+    r["tool_calls"] = [{"id": "a", "name": "search_web", "arguments": '{"q": "météo"}'}]
+    assert has_any_valid_tool_call(r) is False
+    assert disqualifications([r]) == ["aucun appel d'outil valide"]
+
+
 def test_save_to_memory_needs_the_right_content_not_just_the_right_name():
     wrong = run("save_to_memory", tool="save_to_memory", args='{"text": "il aime les chiens"}')
     right = run("save_to_memory", tool="save_to_memory", args='{"text": "son chat s\'appelle Pixel"}')
@@ -111,3 +131,12 @@ def test_blind_sheet_shuffles_so_position_does_not_give_the_label_away():
     orders = {tuple(l for l in blind_sheet(runs, seed=s)[0].splitlines() if l.startswith("### "))
               for s in range(6)}
     assert len(orders) > 1
+
+
+def test_labels_change_between_campaigns_so_reading_the_mapping_once_is_not_enough():
+    runs = [run("francais", text="r", model=m) for m in ("alpha", "beta", "gamma", "delta")]
+    # L'appelant passe l'horodatage de la campagne. Avec une graine fixe, avoir
+    # lu blind_labels une fois désanonymiserait toutes les campagnes suivantes.
+    mappings = {tuple(sorted(blind_sheet(runs, seed=stamp)[1].items()))
+                for stamp in ("2026-08-04_120000", "2026-08-04_130000", "2026-08-05_090000")}
+    assert len(mappings) > 1
