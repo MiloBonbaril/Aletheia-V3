@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from eval.dump_history import strip_images
-from eval.fixtures import FIXTURE_PATH, SHARED_PROMPT, _build, load_scenarios
+from eval.fixtures import FIXTURE_PATH, SHARED_PROMPT, build_messages, load_scenarios
 from src.prompt_builder import PromptBuilder
 
 
@@ -27,8 +27,8 @@ def test_building_twice_from_the_same_fixture_gives_an_identical_prompt():
         {"role": "tool", "content": "souvenir récupéré"},
         {"role": "assistant", "content": "oui."},
     ]
-    first = _build(pb, history, "un rappel")
-    second = _build(pb, history, "un rappel")
+    first = build_messages(pb, SHARED_PROMPT, history, "un rappel")
+    second = build_messages(pb, SHARED_PROMPT, history, "un rappel")
 
     # Sans copie défensive, le run 2 repartirait d'un historique déjà réécrit par
     # le run 1 : le prompt gonflerait à chaque itération et prompt_tokens avec.

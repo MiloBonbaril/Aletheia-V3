@@ -48,12 +48,32 @@ def config_hashes() -> dict[str, str]:
     return hashes
 
 
-def _build(pb: PromptBuilder, history: list[dict] | None = None, rag_results: str = "") -> list[dict]:
+def build_messages(pb: PromptBuilder, prompt: str = SHARED_PROMPT,
+                   history: list[dict] | None = None, rag_results: str = "") -> list[dict]:
     # deepcopy obligatoire : PromptBuilder.build répare les rôles `tool` et
     # compacte les tours consécutifs en mutant les dicts qu'on lui passe. Sans
     # copie, le run 2 partirait d'un historique déjà réécrit par le run 1 et on
     # mesurerait un prompt différent à chaque itération.
-    return pb.build(SHARED_PROMPT, history=copy.deepcopy(history), rag_results=rag_results)
+    return pb.build(prompt, history=copy.deepcopy(history), rag_results=rag_results)
+
+
+def _read_fixture() -> dict | None:
+    try:
+        with open(FIXTURE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+def typique_context() -> tuple[list[dict], str] | None:
+    """Historique et <recall> du scénario `typique`, sur lesquels le groupe
+    `qualité` monte ses 6 prompts : un contrôle de comportement joué hors des
+    conditions réelles ne prédit rien."""
+    data = _read_fixture()
+    if not data or "typique" not in data.get("scenarios", {}):
+        return None
+    entry = data["scenarios"]["typique"]
+    return entry["history"], entry["rag_results"]
 
 
 def load_scenarios() -> tuple[dict, dict | None]:
@@ -63,12 +83,10 @@ def load_scenarios() -> tuple[dict, dict | None]:
     pas versionné (données Discord de tiers, dépôt public), donc le banc doit
     rester lançable sur un clone frais, avec `froid` seul.
     """
-    scenarios = {"froid": lambda pb: _build(pb)}
+    scenarios = {"froid": lambda pb: build_messages(pb)}
 
-    try:
-        with open(FIXTURE_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
+    data = _read_fixture()
+    if data is None:
         return scenarios, None
 
     # On itère ce que la fixture contient plutôt que de réépeler les noms de
@@ -77,7 +95,7 @@ def load_scenarios() -> tuple[dict, dict | None]:
     for name, entry in data["scenarios"].items():
         # Argument par défaut plutôt que fermeture : sinon tous les scénarios
         # captureraient la dernière valeur de la boucle.
-        scenarios[name] = lambda pb, e=entry: _build(pb, e["history"], e["rag_results"])
+        scenarios[name] = lambda pb, e=entry: build_messages(pb, SHARED_PROMPT, e["history"], e["rag_results"])
 
     meta = {
         "dumped_at": data.get("dumped_at"),
