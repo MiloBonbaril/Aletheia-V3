@@ -28,6 +28,7 @@ from openai import AsyncOpenAI
 from rich.console import Console
 from rich.table import Table
 
+from eval.fixtures import SCENARIO_ORDER, config_hashes, load_scenarios
 from eval.stream import consume_stream
 from src.prompt_builder import PromptBuilder
 
@@ -48,19 +49,6 @@ ENABLE_THINKING = str(REASONING_EFFORT).strip().lower() != "none"
 
 BOOT_TIMEOUT = 300.0
 console = Console()
-
-# Message utilisateur du scénario `froid` : aucun historique, aucun <recall>,
-# juste le prompt système + une phrase. C'est le plancher absolu de latence.
-FROID_PROMPT = "Salut Aletheia, tu fais quoi de beau ?"
-
-
-def scenario_froid(pb: PromptBuilder) -> list[dict]:
-    return pb.build(FROID_PROMPT)
-
-
-# Construits à la volée par PromptBuilder à chaque run — jamais figés, sinon le
-# banc mesurerait un prompt que la production n'envoie plus.
-SCENARIOS = {"froid": scenario_froid}
 
 
 def port_from_argv(argv: list[str]) -> int:
@@ -134,12 +122,20 @@ async def one_run(client: AsyncOpenAI, model: str, messages: list[dict], tools: 
     return await consume_stream(stream, start)
 
 
-async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder) -> tuple[list[dict], dict | None]:
-    """Retourne (runs, failure). Un candidat qui casse ne tue jamais le banc."""
+async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder,
+                      scenarios: dict) -> tuple[list[dict], list[dict]]:
+    """Retourne (runs, failures). Un candidat qui casse ne tue jamais le banc,
+    et un scénario qui casse n'invalide pas les scénarios déjà mesurés."""
     name, argv = entry["name"], entry["argv"]
     port = port_from_argv(argv)
-    runs, proc, client = [], None, None
+    runs, failures, proc, client = [], [], None, None
     log = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+
+    def log_tail() -> str:
+        log.seek(0, os.SEEK_END)
+        size = log.tell()
+        log.seek(max(0, size - 8000))
+        return "".join(log.readlines()[-40:])
 
     try:
         if await port_is_busy(port):
@@ -156,23 +152,34 @@ async def bench_model(entry: dict, cfg: dict, pb: PromptBuilder) -> tuple[list[d
         tools = pb.tools_schema
         seed = cfg.get("seed", 1337)
 
-        for scenario, build in SCENARIOS.items():
+        for scenario in [s for s in SCENARIO_ORDER if s in scenarios]:
+            build = scenarios[scenario]
             console.print(f"  · scénario [cyan]{scenario}[/cyan] : chauffe…", end="")
-            # Run de chauffe jeté : il paie le premier accès disque/VRAM.
-            await one_run(client, name, build(pb), tools, cfg, seed)
-            for i in range(cfg.get("runs", 5)):
-                result = await one_run(client, name, build(pb), tools, cfg, seed)
-                runs.append({"model": name, "argv": argv, "scenario": scenario, "run": i, **result})
-                ttff = result["ttff"]
-                console.print(" " + (f"{ttff * 1000:.0f}ms" if ttff else "—"), end="")
-            console.print()
-        return runs, None
+            try:
+                # Run de chauffe jeté : il paie le premier accès disque/VRAM.
+                await one_run(client, name, build(pb), tools, cfg, seed)
+                for i in range(cfg.get("runs", 5)):
+                    result = await one_run(client, name, build(pb), tools, cfg, seed)
+                    runs.append({"model": name, "argv": argv, "scenario": scenario, "run": i, **result})
+                    ttff = result["ttff"]
+                    console.print(" " + (f"{ttff * 1000:.0f}ms" if ttff else "—"), end="")
+                console.print()
+            except Exception as e:
+                # Typiquement : n_ctx trop petit pour `chargé`. Les scénarios
+                # déjà mesurés restent valides, c'est tout l'intérêt.
+                console.print(f"\n[red]  ✗ {scenario} : {e}[/red]")
+                failures.append({"model": name, "argv": argv, "scenario": scenario,
+                                 "error": str(e), "server_log_tail": log_tail()})
+                if proc.poll() is not None:
+                    failures[-1]["error"] += " (serveur mort, scénarios suivants abandonnés)"
+                    break
+        return runs, failures
 
     except Exception as e:
-        log.seek(0)
-        tail = "".join(log.readlines()[-40:])
         console.print(f"[red]✗ {name} : {e}[/red]")
-        return runs, {"model": name, "argv": argv, "error": str(e), "server_log_tail": tail}
+        failures.append({"model": name, "argv": argv, "scenario": None,
+                         "error": str(e), "server_log_tail": log_tail()})
+        return runs, failures
 
     finally:
         if client:
@@ -208,21 +215,23 @@ def render(runs: list[dict], failures: list[dict]) -> None:
     for col in ("Modèle", "Scénario", "Runs", "TTFT ms", "TTFF ms", "Décodage tok/s", "Prefill tok/s", "Tokens entrée"):
         table.add_column(col, justify="left" if col in ("Modèle", "Scénario") else "right")
 
-    seen = []
-    for r in runs:
-        key = (r["model"], r["scenario"])
-        if key in seen:
-            continue
-        seen.append(key)
-        group = [x for x in runs if (x["model"], x["scenario"]) == key]
-        table.add_row(
-            r["model"], r["scenario"], str(len(group)),
-            fmt(stats([x["ttft"] for x in group]), 1000),
-            fmt(stats([x["ttff"] for x in group]), 1000),
-            fmt(stats([x["decode_tps"] for x in group]), digits=1),
-            fmt(stats([x["prefill_tps"] for x in group]), digits=0),
-            fmt(stats([x["prompt_tokens"] for x in group])),
-        )
+    # Groupé par modèle, scénarios dans l'ordre froid → typique → chargé : c'est
+    # la dégradation d'un modèle d'un scénario à l'autre qu'on vient lire, pas
+    # la valeur absolue d'une case.
+    models = list(dict.fromkeys(r["model"] for r in runs))
+    for model in models:
+        for scenario in SCENARIO_ORDER:
+            group = [x for x in runs if x["model"] == model and x["scenario"] == scenario]
+            if not group:
+                continue
+            table.add_row(
+                model, scenario, str(len(group)),
+                fmt(stats([x["ttft"] for x in group]), 1000),
+                fmt(stats([x["ttff"] for x in group]), 1000),
+                fmt(stats([x["decode_tps"] for x in group]), digits=1),
+                fmt(stats([x["prefill_tps"] for x in group]), digits=0),
+                fmt(stats([x["prompt_tokens"] for x in group])),
+            )
     console.print(table)
 
     # L'argv sous le tableau, pas dedans : deux modèles mesurés avec des flags
@@ -231,7 +240,10 @@ def render(runs: list[dict], failures: list[dict]) -> None:
         console.print(f"[dim]{model} :[/dim] {' '.join(argv)}")
 
     for f in failures:
-        console.print(f"[red]✗ {f['model']}[/red] : {f['error']}")
+        # Pas de crochets autour du scénario : rich les lirait comme une balise
+        # de style et les avalerait silencieusement.
+        scope = f.get("scenario") or "démarrage"
+        console.print(f"[red]✗ {f['model']} · {scope}[/red] : {f['error']}")
     console.print("[dim]Pas de score composite : arbitrer TTFF contre fiabilité, c'est ta décision.[/dim]")
 
 
@@ -241,18 +253,34 @@ async def main() -> None:
         cfg = json.load(f)
 
     pb = PromptBuilder()
+    scenarios, fixture_meta = load_scenarios()
+    if fixture_meta is None:
+        console.print("[yellow]⚠ Pas de fixtures d'historique — seul `froid` sera mesuré. "
+                      "Lance `python eval/dump_history.py` (Postgres allumé) pour les générer.[/yellow]")
+    elif fixture_meta.get("stale_prompt"):
+        console.print("[yellow]⚠ Les fixtures ont été dumpées avec un autre message final : "
+                      "leur <recall> ne correspond plus. Redumpe-les.[/yellow]")
+
     runs, failures = [], []
     for entry in cfg["models"]:
-        model_runs, failure = await bench_model(entry, cfg, pb)
+        model_runs, model_failures = await bench_model(entry, cfg, pb, scenarios)
         runs.extend(model_runs)
-        if failure:
-            failures.append(failure)
+        failures.extend(model_failures)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
     out = os.path.join(RESULTS_DIR, f"{datetime.now():%Y-%m-%d_%H%M%S}.json")
     with open(out, "w", encoding="utf-8") as f:
-        json.dump({"config": cfg, "sampling": sampling_settings(cfg), "runs": runs, "failures": failures},
-                  f, ensure_ascii=False, indent=2)
+        json.dump({
+            "config": cfg,
+            "sampling": sampling_settings(cfg),
+            # Persona/mémoire/utilisateurs se recompilent dans le prompt système à
+            # chaque run : sans leur empreinte, deux campagnes à des semaines
+            # d'écart se compareraient comme si elles avaient mesuré la même chose.
+            "config_hashes": config_hashes(),
+            "fixtures": fixture_meta,
+            "runs": runs,
+            "failures": failures,
+        }, f, ensure_ascii=False, indent=2)
 
     render(runs, failures)
     console.print(f"[dim]→ {out}[/dim]")
