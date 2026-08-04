@@ -1,0 +1,31 @@
+{
+  "runs": 5,
+  "max_tokens": 200,
+  "seed": 1337,
+  "models": [
+    {
+      "name": "gemma-4-12B-it-qat-UD-Q4_K_XL",
+      "argv": [
+        "llama-server",
+        "-m", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+        "-c", "20224",
+        "-ngl", "99",
+        "-fa", "on",
+        "--jinja",
+        "--port", "8081"
+      ]
+    },
+    {
+      "name": "gemma-4-E2B-it-qat-UD-Q4_K_XL",
+      "argv": [
+        "llama-server",
+        "-m", "/mnt/forge/ai/models/Gemma-4/Gemma-4-E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        "-c", "20224",
+        "-ngl", "99",
+        "-fa", "on",
+        "--jinja",
+        "--port", "8081"
+      ]
+    }
+  ]
+}

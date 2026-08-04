@@ -37,3 +37,6 @@ nats-data/
 *.log
 
 services/io_voix/models
+
+# Mesures brutes du banc d'eval (spécifiques à la machine, pas au dépôt)
+services/lobe_frontal/eval/results/
