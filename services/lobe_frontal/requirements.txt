@@ -6,3 +6,4 @@ openai
 mistralai
 httpx
 textual
+rich

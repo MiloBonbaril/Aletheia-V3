@@ -12,7 +12,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.fragments import PUNCTUATION_PATTERN
+from src.fragments import take_fragment
 
 # Balises du prompt système (cf. PromptBuilder.build_system_prompt) : si l'une
 # ressort dans la réponse, le modèle recrache son prompt au lieu de jouer Aletheia.
@@ -83,14 +83,11 @@ async def consume_stream(stream, start: float, clock=time.monotonic) -> dict:
             text += token
             buffer += token
 
-            match = PUNCTUATION_PATTERN.search(buffer)
-            if match:
-                fragment = buffer[:match.end()].strip()
-                buffer = buffer[match.end():]
-                if fragment:
-                    fragments.append(fragment)
-                    if ttff is None:
-                        ttff = now - start
+            fragment, buffer = take_fragment(buffer)
+            if fragment:
+                fragments.append(fragment)
+                if ttff is None:
+                    ttff = now - start
 
         for tc_chunk in getattr(delta, "tool_calls", None) or []:
             idx = getattr(tc_chunk, "index", 0)
@@ -110,8 +107,12 @@ async def consume_stream(stream, start: float, clock=time.monotonic) -> dict:
 
     # Flush final, comme main.py : une réponse sans aucune ponctuation ne
     # déclenche la voix qu'ici, et son TTFF est donc la fin du flux.
+    # Sauf sur un tour d'outil : main.py y garde la queue pour le tour suivant
+    # au lieu de la publier, donc la flusher ici fabriquerait un TTFF que la
+    # production ne produit jamais. Le banc ne joue qu'un tour — sur ce chemin
+    # il n'y a pas de TTFF à rapporter, et None se lit mieux qu'un faux chiffre.
     tail = buffer.strip()
-    if tail:
+    if tail and finish_reason != "tool_calls":
         fragments.append(tail)
         if ttff is None:
             ttff = end - start

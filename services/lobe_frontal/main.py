@@ -19,7 +19,7 @@ logger = logging.getLogger("LobeFrontal")
 from dotenv import load_dotenv
 from OpenAI.interface import OpenAIInterface
 from src.prompt_builder import PromptBuilder
-from src.fragments import PUNCTUATION_PATTERN
+from src.fragments import take_fragment
 from tui import LobeTUI
 
 load_dotenv()
@@ -295,16 +295,12 @@ async def main():
                             overall_response_fragments.append(token)
                             text_buffer += token
 
-                            # Analyse instantanée sur le buffer glissant
-                            match = PUNCTUATION_PATTERN.search(text_buffer)
-                            if match:
-                                end_idx = match.end()
-                                fragment = text_buffer[:end_idx].strip()
-                                text_buffer = text_buffer[end_idx:] # On purge uniquement ce qui est envoyé
-                                
-                                if fragment:
-                                    await publish_fragment(sequence, fragment, False, turn_start)
-                                    sequence += 1
+                            # Analyse instantanée sur le buffer glissant (on ne
+                            # purge que ce qui est envoyé)
+                            fragment, text_buffer = take_fragment(text_buffer)
+                            if fragment:
+                                await publish_fragment(sequence, fragment, False, turn_start)
+                                sequence += 1
 
                         # Agrégation des chunks d'outils (Streaming de l'appel d'outil)
                         if getattr(delta, "tool_calls", None):
