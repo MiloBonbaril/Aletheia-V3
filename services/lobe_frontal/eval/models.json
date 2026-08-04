@@ -8,11 +8,28 @@
       "argv": [
         "llama-server",
         "-m", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
-        "-c", "20224",
-        "-ngl", "99",
+        "--model-draft", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/mtp-gemma-4-12B-it.gguf",
+        "--mmproj", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/mmproj-BF16.gguf",
+        "--spec-type", "draft-mtp",
+        "--spec-draft-n-max", "4",
+        "-c", "20000",
+        "-ctk", "q4_0",
+        "-ctv", "q4_0",
+        "-ngl", "999",
+        "--host", "127.0.0.1",
+        "--port", "8081",
         "-fa", "on",
-        "--jinja",
-        "--port", "8081"
+        "--parallel", "1",
+        "-b", "4096",
+        "-ub", "4096",
+        "-t", "4",
+        "-tb", "8",
+        "--mlock",
+        "--temp", "1",
+        "--top_p", "0.95",
+        "--min_p", "0.01",
+        "--top_k", "20",
+        "--repeat_penalty", "1.0"
       ]
     },
     {
@@ -20,11 +37,29 @@
       "argv": [
         "llama-server",
         "-m", "/mnt/forge/ai/models/Gemma-4/Gemma-4-E2B/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
-        "-c", "20224",
-        "-ngl", "99",
+        "--model-draft", "/mnt/forge/ai/models/Gemma-4/Gemma-4-E2B/mtp-gemma-4-E2B-it.gguf",
+        "--mmproj", "/mnt/forge/ai/models/Gemma-4/Gemma-4-E2B/mmproj-BF16.gguf",
+        "--spec-type", "draft-mtp",
+        "--spec-draft-n-max", "4",
+        "-c", "20000",
+        "-ctk", "q8_0",
+        "-ctv", "q8_0",
+        "-ngl", "999",
+        "--host", "127.0.0.1",
+        "--port", "8081",
         "-fa", "on",
-        "--jinja",
-        "--port", "8081"
+        "--parallel", "1",
+        "-b", "4096",
+        "-ub", "4096",
+        "-t", "4",
+        "-tb", "8",
+        "--mlock",
+        "--temp", "1",
+        "--top_p", "0.95",
+        "--min_p", "0.01",
+        "--top_k", "20",
+        "--repeat_penalty", "1.0",
+        "--chat-template-file", "/mnt/forge/ai/models/Gemma-4/Gemma-4-E2B/chat_template.jinja"
       ]
     }
   ]
