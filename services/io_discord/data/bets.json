@@ -37,5 +37,19 @@
         },
         "resolved": false,
         "winner": null
+    },
+    "391e": {
+        "title": "Qui trouvera un job en premier ?",
+        "win_condition": "trouver un job en premier, signer le contrat et faire son premier jour",
+        "participants": [
+            "<@293414992663805952>",
+            "<@310709886121934850>",
+            "<@362260685540818944>",
+            "<@306809650802589707>",
+            "<@733261833993060362>"
+        ],
+        "bettors": {},
+        "resolved": false,
+        "winner": null
     }
 }
