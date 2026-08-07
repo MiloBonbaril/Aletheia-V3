@@ -1,15 +1,32 @@
-# I/O Text
+# ⌨️ I/O Text
 
-Un utilitaire en ligne de commande pour envoyer des messages textuels multi-lignes au système (simule la voix ou les autres entrées capteurs).
+A command-line tool that sends multi-line text messages to the system. Use it to simulate the voice
+input or a different sensor input.
 
-### Fonctionnalités :
-- Interface interactive multi-lignes en terminal.
-- Support des commandes de type éditeur de texte (`:w`, `:q`, etc.).
-- Publie les messages structurés sur le topic NATS `io.user.msg.text`.
+## 🎯 Functions
 
-### Utilisation :
-1. Lancez le service : `python main.py`
-2. Tapez votre message sur une ou plusieurs lignes.
-3. Entrez la commande `:w` ou `:send` sur une ligne vide pour envoyer.
-4. `:c` ou `:clear` pour effacer le buffer local sans envoyer.
-5. `:q` ou `:quit` pour quitter.
+- An interactive multi-line interface in the terminal.
+- Commands that operate as in a text editor.
+- It publishes the messages on `io.user.msg.text`. It puts the name of the sender in front of the
+  text.
+
+## ⚙️ Start
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+The NATS address is in the source code. The service does not read `NATS_URL`.
+
+## 📖 How to use it
+
+1. Start the service.
+2. Type your message on one or more lines.
+3. Type `:w` or `:send` on an empty line to send the message.
+4. Type `:c` or `:clear` to erase the local buffer. The service sends nothing.
+5. Type `:q` or `:quit` to stop the service.
+
+## 🔌 NATS interface
+
+- **Publishes on:** `io.user.msg.text`

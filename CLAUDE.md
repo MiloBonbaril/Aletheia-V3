@@ -1,89 +1,184 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives guidance to Claude Code (claude.ai/code) for work in this repository.
 
-## Project Overview
+Write all documentation in this repository in ASD-STE100 Simplified Technical English: simple
+present tense, active voice, short sentences, one instruction per sentence, and the same word for
+the same thing.
 
-Aletheia (internal codename "Nexus-V") is an autonomous, real-time virtual entity (VTuber) that hears, sees, thinks, remembers, and speaks. It's built as an event-driven microservices system where independent services never block on each other — I/O publishes events and reacts asynchronously as results become available. This is a hard real-time system: target is time-to-first-audio under ~300ms and LLM time-to-first-token under ~200ms, running on consumer hardware. Latency-sensitive changes should be validated against `services/benchmark`.
+## Project overview
 
-Services communicate exclusively through a central **NATS** event bus (fire-and-forget pub/sub, plus request-reply for a few RAG topics). There is no direct service-to-service RPC. See `NATS_TOPICS.md` for the full topic/payload contract and `PROMPTING.md` for the LLM system-prompt XML schema — read both before touching cross-service message flow. `CONCEPT.md` has the original architecture rationale (in French).
+Aletheia (internal codename "Nexus-V") is an autonomous, real-time virtual entity (a VTuber). It
+hears, sees, thinks, remembers and speaks. It is an event-driven microservice system. The services
+never block each other: the I/O services publish events and react when the results become
+available.
+
+This is a hard real-time system. The targets are a time to first audio below 300 ms, and an LLM time
+to first token below 200 ms, on consumer hardware. Measure each latency-sensitive change with
+`services/benchmark`. Do not measure by hand.
+
+The services communicate only through a central **NATS** bus. It is fire-and-forget publish and
+subscribe, plus request-reply for four topics. There is no direct call between two services.
+
+Read `NATS_TOPICS.md` for the full topic and payload contract, and `PROMPTING.md` for the XML schema
+of the system prompt, before you change a flow between services. `CONCEPT.md` gives the architecture
+reasons.
 
 ## Architecture
 
-Services live under `services/<name>` and map to a "brain" metaphor:
+The services are in `services/<name>`. Their names come from a brain metaphor.
 
-- **cortex** (`services/cortex`, Rust) — central orchestrator/router. Subscribes to ingress topics (`io.user.msg.text`, etc.), dispatches `cortex.prompt` + `hippocampe.context.build` in parallel, tracks sessions via `correlation_id`/`session_id`.
-- **lobe_frontal** (`services/lobe_frontal`, Python) — LLM engine. Waits on `hippocampe.context.ready` before running inference (Groq/OpenAI-compatible/Mistral interfaces under `Groq/`, `OpenAI/`, `Mistral/`), builds the XML system prompt via `src/prompt_builder.py`, streams response fragments split on punctuation to `lobe.fragment_stream`, and drives function calling (`save_to_memory`, `get_from_memory`, `stay_silent`). Persona/knowledge/user data are hot-editable markdown files in `config/` (`PERSONA.md`, `MEMORY.md`, `USER.md`) — no code change or restart needed to alter behavior.
-- **hippocampe** (`services/hippocampe`, Python) — memory. Postgres (`database.py`) for episodic conversation history, Qdrant (`rag_manager.py`) for vector/RAG memory. RAG recall is **passive**: it runs automatically on every `hippocampe.context.build` request in parallel with history lookup and is injected into the `<recall>` prompt section; `get_from_memory`/`save_to_memory` remain available as active LLM tools for targeted queries. Has its own `docker-compose.yml` for Postgres + Qdrant, separate from the root one (NATS only).
-- **io_oreilles** (Rust) — STT: mic capture → Silero VAD → CTranslate2/Whisper → `io.user.speak`.
-- **io_voix** (Python) — TTS via Kokoro ONNX, consumes `lobe.fragment_stream`. Downloads model weights (~350MB) to `models/` on first run.
-- **io_discord** (Python) — Discord bot gateway (`bot.py`, cogs in `cogs/`), bridges Discord ↔ `io.user.msg.text` / `lobe.fragment_stream`.
-- **io_text** — terminal CLI for manually injecting `io.user.msg.text` events (multi-line editor with `:w`/`:q`/`:c` commands).
-- **io_yeux**, **io_visage**, **terminal** — Twitch/YouTube chat aggregation, VTube Studio lip-sync/expression control, and the admin dashboard (NextJS/TS), respectively; these are stubs/not fully implemented (READMEs describe intended role only, no source yet).
-- **benchmark** (`services/benchmark`) — passively subscribes to NATS per an event graph (`graphs/E2E.json`) to reconstruct end-to-end latency for a message across the whole pipeline. Use this to verify performance-sensitive changes, not manual timing.
+- **cortex** (`services/cortex`, Rust) — the central orchestrator and router. It subscribes to the
+  ingress topics (`io.user.msg.text`, `io.user.speak`, `io.user.speak.raw`,
+  `limbic.proactive.trigger`), dispatches `cortex.prompt` and `hippocampe.context.build` in
+  parallel, publishes `cortex.interaction.started`, and tracks the sessions with `correlation_id`
+  and `session_id`.
+- **lobe_frontal** (`services/lobe_frontal`, Python) — the LLM engine. It waits for
+  `hippocampe.context.ready` before the inference. It builds the XML system prompt with
+  `src/prompt_builder.py`. It cuts the answer at punctuation marks and streams the fragments on
+  `lobe.fragment_stream`. It controls the function calling (`save_to_memory`, `get_from_memory`,
+  `stay_silent`, `set_mood`). It answers `lobe.topic.generate` for the proactivity of `limbic`. An
+  embedded Textual TUI (`tui.py`) shows the prompt, the output and the tool activity. The persona,
+  the knowledge and the user data are Markdown files in `config/` (`PERSONA.md`, `MEMORY.md`,
+  `USER.md`). An edit changes the behavior with no code change and no restart.
+  - The inference goes to a local llama.cpp server through `OpenAI/interface.py`. `main.py` selects
+    this interface at import time. The `Groq/` and `Mistral/` interfaces and the `INTERFACE`
+    environment variable are not connected. This is a decision, not a defect: see
+    `docs/adr/0002-lobe-frontal-stays-llama-cpp-only.md`. Do not "repair" it.
+  - `eval/` is an isolated multi-model bench. It speaks HTTP directly to `llama-server`. It does not
+    use NATS. Run it on an idle GPU. Run `python eval/dump_history.py` first, or the bench measures
+    the `froid` scenario only.
+- **hippocampe** (`services/hippocampe`, Python) — the memory. PostgreSQL (`database.py`) keeps the
+  conversation history. Qdrant (`rag_manager.py`) keeps the vector memory. The RAG recall is
+  **passive**: it runs automatically for each `hippocampe.context.build` request, in parallel with
+  the history read, and goes into the `<recall>` section of the prompt. It runs only when the prompt
+  is not empty, thus a voice-only message skips it. `get_from_memory` and `save_to_memory` stay
+  available as active LLM tools. This service has its own `docker-compose.yml` for PostgreSQL and
+  Qdrant. The root file starts NATS only.
+- **limbic** (`services/limbic`, Python) — the mood and the proactivity. It owns the mood state
+  (`limbic.mood.set` in, `limbic.mood.update` out, with a decay to a neutral baseline). It holds a
+  boredom gauge that starts a proactive interaction (`limbic.proactive.trigger`) behind a presence
+  gate and a time gate. It asks the lobe_frontal for the subject.
+- **io_oreilles** (Rust) — STT: microphone capture → Silero VAD → CTranslate2 and Whisper →
+  `io.user.speak`. With `--discord`, it processes the per-speaker PCM audio from `io_discord`
+  instead of the local microphone. The GPU build (`--features cuda`) is necessary for real-time
+  speech.
+- **io_voix** (Python) — TTS with Kokoro ONNX. It consumes `lobe.fragment_stream`. It publishes the
+  audio on `io.voice.speak.audio`, and the time references on `io.voice.speak.start` and `.end`. It
+  downloads the model weights (approximately 350 MB) into `models/` at the first start.
+- **io_discord** (Python) — the Discord gateway (`bot.py`, cogs in `cogs/`). It bridges Discord and
+  `io.user.msg.text` / `lobe.fragment_stream`. It also streams the voice audio in the two
+  directions, publishes the voice presence, and holds an independent bets function.
+- **io_text** — a terminal CLI that injects `io.user.msg.text` events. It is a multi-line editor
+  with the `:w`, `:q` and `:c` commands.
+- **benchmark** (`services/benchmark`) — it subscribes passively to NATS with an event graph
+  (`graphs/E2E.json`, `graphs/T2T.json`) and rebuilds the end-to-end latency of a message.
+- **io_yeux**, **io_visage**, **terminal** — Twitch and YouTube chat aggregation, VTube Studio
+  control, and the admin dashboard. These three contain a README file only. There is no source code.
 
-Each service is independently runnable and has its own `requirements.txt` (Python) or `Cargo.toml` (Rust) — there is no shared build system or workspace.
+Each service starts independently. Each one has its own `requirements.txt` (Python) or `Cargo.toml`
+(Rust). There is no shared build system and no workspace.
 
 ## Commands
 
-Bring up the event bus (required for anything else to work):
+Start the event bus. All the other services need it:
+
 ```bash
-docker compose up -d          # starts NATS (ports 4222 client, 8222 monitoring)
+docker compose up -d          # NATS: 4222 (clients), 8222 (monitoring)
 ```
 
-Hippocampe additionally needs its own datastores:
+Start the datastores of the hippocampe:
+
 ```bash
-cd services/hippocampe && docker compose up -d   # Postgres (5432) + Qdrant (6333/6334)
+cd services/hippocampe && docker compose up -d   # PostgreSQL 5432, Qdrant 6333/6334
 ```
 
-Run a Python service (each has its own `requirements.txt`, no shared venv):
+Start a Python service (each one has its own `requirements.txt`, there is no shared virtual
+environment):
+
 ```bash
 cd services/<name>
 pip install -r requirements.txt
-python main.py     # or bot.py for io_discord
+python main.py     # bot.py for io_discord
 ```
 
-Run a Rust service:
+Start a Rust service:
+
 ```bash
 cd services/cortex        # or services/io_oreilles
 cargo run --release
 ```
 
-Run the benchmark harness against a live pipeline (services + NATS must already be running):
+Run the benchmark on a live pipeline (NATS and the services must operate):
+
 ```bash
 cd services/benchmark
 pip install -r requirements.txt
 python main.py                       # default graph: graphs/E2E.json
-python main.py /path/to/graph.json   # custom event graph
+python main.py /path/to/graph.json   # a different event graph
 ```
 
 Stop everything:
+
 ```bash
 docker compose down
 ```
 
-There is no test suite, linter, or formatter configured in this repository at present.
+### Tests
+
+There is no repository-level test runner, no linter and no formatter. Some services have their own
+tests, and they cover the pure functions only:
+
+```bash
+cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
+cd services/cortex && cargo test        # cortex (also io_oreilles)
+```
 
 ### Key environment variables
-Each service loads its own `.env` (via `python-dotenv` for Python services). Notable ones: `NATS_URL` (all services, default `nats://localhost:4222`), `GROQ_API_KEY`/`LLM_MODEL`/`TEMPERATURE`/`TOP_P`/`REASONING_EFFORT`/`MAX_CONCURRENT_INFERENCE` (lobe_frontal), `DISCORD_TOKEN`/`DISCORD_USER_ID`/`DISCORD_GUILD_ID`/`TEXT_CHANNEL_ID` (io_discord), `KOKORO_VOICE`/`KOKORO_MODELS_DIR` (io_voix), `STT_LANGUAGE` (io_oreilles).
 
-## Working across services
+Each service reads its own `.env` file. The Python services use `python-dotenv`.
 
-Since services only interact via NATS, when changing a message payload or adding a new topic:
-1. Update `NATS_TOPICS.md` to keep the contract documented.
-2. Update every publisher and subscriber of that topic — grep across `services/` for the topic string, since there's no shared schema/types package between Rust and Python.
-3. Preserve `correlation_id` propagation; it's what lets the benchmark service and cortex's session tracking reconstruct a request's lifecycle across services.
+**Important:** only `benchmark`, `io_oreilles` and `limbic` read `NATS_URL`. The other services have
+the address `nats://localhost:4222` in their source code.
+
+- lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`
+- hippocampe: `POSTGRES_URL`, `QDRANT_URL`, `QDRANT_PORT`, `RAG_SCORE_THRESHOLD`
+- limbic: `MOOD_DECAY_RATE`, `TICK_INTERVAL_SECONDS`, `BOREDOM_INCREMENT_RATE`, `BOREDOM_THRESHOLD`,
+  `PROACTIVE_GATE_START_HOUR`, `PROACTIVE_GATE_END_HOUR`
+- io_discord: `DISCORD_TOKEN`, `DISCORD_USER_ID`, `DISCORD_GUILD_ID`, `TEXT_CHANNEL_ID`,
+  `COMMAND_PREFIX`
+- io_voix: `KOKORO_VOICE`, `KOKORO_SPEED`, `KOKORO_MODELS_DIR`, `MUTE_LOCAL_PLAYBACK`
+- io_oreilles: `STT_LANGUAGE`, `STT_MODEL_PATH`, `RAW_AUDIO`, `ORT_DYLIB_PATH`
+
+## Work between services
+
+The services interact only through NATS. When you change a payload or add a topic:
+
+1. Update `NATS_TOPICS.md` to keep the contract correct.
+2. Update each publisher and each subscriber of that topic. Use `grep` on the topic name in
+   `services/`, because there is no shared schema package between Rust and Python.
+3. Keep the `correlation_id`. The benchmark service and the session tracking of the cortex use it to
+   rebuild the life cycle of a request.
+
+## Repository rules
+
+This repository is public. Do not commit real conversation data. The history dumps of the eval bench
+(`services/lobe_frontal/eval/fixtures/`) and the measurement results
+(`services/lobe_frontal/eval/results/`) are in `.gitignore`. Keep them there.
 
 ## Agent skills
 
 ### Issue tracker
 
-Issues live as GitHub Issues on `MiloBonbaril/Aletheia-V3`, managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+The issues are GitHub Issues on `MiloBonbaril/Aletheia-V3`. Use the `gh` CLI. See
+`docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+The default label set is `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`,
+`wontfix`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single context: `CONTEXT.md` and `docs/adr/` at the root of the repository. See
+`docs/agents/domain.md`.

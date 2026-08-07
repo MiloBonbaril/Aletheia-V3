@@ -1,8 +1,15 @@
-# Terminal (Frontend d'Administration)
+# 🎛️ Terminal (administration frontend)
 
-L'interface de contrôle passive.
+The passive control interface.
 
-### Rôle :
-- Panneau Web en React ou Vue avec WebSocket en arrière plan.
-- Ne contient aucune logique métier de l'IA.
-- Permet la surveillance de l'état système, le réglage manuel des variables PostgreSQL et l'envoi d'ordres "God Mode" si nécessaire.
+> **Status: specification only.** This directory contains this file. There is no source code.
+
+## 🎯 Planned functions
+
+- A web panel with a WebSocket connection to the event bus.
+- Monitoring of the state of the system: the services, the message flows and the latencies.
+- Manual adjustment of the global parameters in PostgreSQL.
+- Transmission of direct commands when necessary.
+
+The panel contains no AI logic. It observes the bus and it sends commands. It does not make
+decisions.

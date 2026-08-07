@@ -1,8 +1,18 @@
-# I/O Visage (VTube Controller)
+# 👤 I/O Visage (VTube Studio controller)
 
-L'actionneur chargé de contrôler l'avatar en direct.
+The actuator that controls the live avatar.
 
-### Rôle principal :
-- Capter l'audio sortant du TTS pour générer un Lip-Sync.
-- Récupérer les tags émotionnels insérés par le LLM (ex: `<joy>`).
-- Envoyer les ordres et triggers via WebSocket à VTube Studio pour afficher les expressions en synchronisation temporelle.
+> **Status: specification only.** This directory contains this file. There is no source code.
+
+## 🎯 Planned functions
+
+- Read the audio output of the TTS and generate the lip-sync.
+- Read the emotional data: the mood state on `limbic.mood.update`, or the emotion tags that the LLM
+  puts in the text (for example `<joy>`).
+- Send the commands and the triggers to VTube Studio through a WebSocket. The expressions must stay
+  synchronized with the audio.
+
+## 🔌 Planned NATS interface
+
+- **Subscribes to:** `lobe.fragment_stream`, `io.voice.speak.audio`, `limbic.mood.update`
+- **Publishes on:** `io.face.emotion`

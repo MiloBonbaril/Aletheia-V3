@@ -1,71 +1,101 @@
-# 🧠 Ingénierie du Prompt (Nexus-V)
+# 🧠 Prompt engineering (Nexus-V)
 
-Le Lobe Frontal utilise une approche de **Prompting Structuré en XML**. Cette méthode permet au LLM de distinguer clairement les différentes sources d'information et d'appliquer des règles de comportement strictes sans confusion.
+The lobe_frontal builds a **structured XML system prompt**. The XML lets the LLM see the difference
+between the sources of information. Thus the model applies the behavior rules with no confusion.
 
-## 🏗️ Structure du System Prompt
+The `PromptBuilder` class (`services/lobe_frontal/src/prompt_builder.py`) builds the prompt.
 
-Le prompt système est encapsulé dans une balise `<system>` et divisé en sections sémantiques :
+## 🏗️ Structure of the system prompt
+
+The prompt is in one `<system>` element. Each section has a different function:
 
 ```xml
 <system>
   <persona>
-    <!-- Identité, traits de personnalité, ton, règles de langage et interdits -->
+    <!-- Identity, personality, tone, language rules and prohibitions -->
   </persona>
 
   <core_memory>
-    <!-- Faits persistants, connaissances sur le monde de l'IA, relations viewers, état global -->
+    <!-- Permanent facts, knowledge about the world, global state -->
   </core_memory>
 
   <users>
-    <!-- Profils des utilisateurs connus, préférences, historique relationnel -->
+    <!-- Profiles of the known users, preferences, relation history -->
   </users>
 
   <tools>
-    <!-- Descriptions des fonctions disponibles (save_to_memory, get_from_memory, etc.) -->
-    <tool name="nom_outil">
-      Description de l'utilité et quand l'utiliser.
+    <!-- Short description of each available function -->
+    <tool name="tool_name">
+      What the tool does, and when to use it.
     </tool>
   </tools>
 
   <mood>
-    <!-- Humeur courante d'Aletheia, injectée dynamiquement depuis le dernier état
-         rediffusé par le service limbic (limbic.mood.update). Absente tant qu'aucun
-         mood n'a encore été fixé (ex: limbic pas encore démarré). -->
+    <!-- The current mood of Aletheia. The lobe_frontal injects the last state that
+         limbic published on limbic.mood.update. The section is absent while no mood
+         is known, for example when limbic is not started. -->
   </mood>
 
   <recall>
-    <!-- Souvenirs pertinents rappelés automatiquement par le RAG passif.
-         Cette section est injectée dynamiquement avant chaque inférence
-         en fonction du message de l'utilisateur. -->
+    <!-- Related memories that the passive RAG found. The hippocampe supplies them
+         for each user message. -->
   </recall>
 
   <context window="10min">
-    <!-- Résumé contextuel récent fourni par l'Hippocampe (optionnel) -->
+    <!-- Recent context summary from the hippocampe (optional) -->
   </context>
 </system>
 ```
 
-## 🛠️ Outils (Function Calling)
+The `<persona>`, `<core_memory>`, `<users>` and `<tools>` sections are always present. The
+`<mood>`, `<recall>` and `<context>` sections are present only when there is content for them.
 
-Le système utilise le Function Calling pour interagir avec le monde extérieur et sa propre mémoire.
+## 🛠️ Tools (function calling)
 
-| Outil | Rôle | Quand l'utiliser ? |
-| :--- | :--- | :--- |
-| `get_from_memory` | Recherche RAG active | Pour des recherches ciblées et complexes que le rappel automatique (`<recall>`) n'aurait pas couvert. |
-| `save_to_memory` | Stockage RAG | Lorsqu'une information nouvelle et importante est apprise, ou lors de l'utilisation de l'emoji `peponotes`. |
-| `stay_silent` | Contrôle de flux | Pour ignorer un utilisateur ou répondre à une demande de silence. Ne génère aucun texte. |
-| `set_mood` | Humeur | Lorsqu'une émotion forte anime Aletheia (joie, tristesse, colère, taquinerie...). Prend `emotion`, `intensity` (0-1) et une `description` libre optionnelle. |
+The LLM uses function calling to control its memory, its mood and its silence.
 
-> **Note :** Les souvenirs pertinents sont désormais **automatiquement rappelés** via le RAG passif et injectés dans la section `<recall>` du prompt. Le tool `get_from_memory` reste disponible comme complément pour des requêtes complexes.
+| Tool | Function | When to use it |
+|---|---|---|
+| `get_from_memory` | Active RAG search | For a complex or specific search that the automatic `<recall>` did not cover. |
+| `save_to_memory` | RAG storage | When Aletheia learns new and important information. |
+| `stay_silent` | Flow control | To ignore a user, or to obey a request for silence. It generates no text. |
+| `set_mood` | Mood | When a strong emotion occurs (joy, sadness, anger, a wish to tease). It takes `emotion`, `intensity` (0 to 1) and an optional free `description`. |
 
-> **Note :** `set_mood` ne fait que publier l'intention sur `limbic.mood.set` (fire-and-forget) — le service `limbic` reste seul responsable d'appliquer et de rediffuser l'état canonique via `limbic.mood.update`. Le Lobe Frontal se contente de mettre en cache la dernière valeur reçue et de l'injecter dans `<mood>` au tour suivant ; il ne modifie jamais l'humeur localement.
+Notes:
 
-## 📄 Fichiers de Configuration
+- The passive RAG recalls the related memories automatically and puts them in the `<recall>`
+  section. The `get_from_memory` tool is an addition for complex queries. It is not the primary
+  path.
+- `set_mood` only publishes the intention on `limbic.mood.set` (fire-and-forget). The `limbic`
+  service is the only owner of the mood. It applies the change and publishes the canonical state on
+  `limbic.mood.update`. The lobe_frontal keeps the last received value in memory and injects it in
+  `<mood>` at the next turn. It never changes the mood locally.
+- The lobe_frontal runs a maximum of 10 tool iterations for one turn
+  (`MAX_TOOL_ITERATIONS`). It executes the tool calls of one iteration in parallel.
+- The lobe_frontal writes the result of `get_from_memory` to the history
+  (`hippocampe.history.add`, role `tool`).
 
-Le contenu des balises `<persona>`, `<core_memory>` et `<users>` est dynamiquement injecté depuis des fichiers Markdown situés dans `services/lobe_frontal/config/` :
+## 📄 Configuration files
 
-- **`PERSONA.md`** $\rightarrow$ `<persona>`
-- **`MEMORY.md`** $\rightarrow$ `<core_memory>`
-- **`USER.md`** $\rightarrow$ `<users>`
+The content of the `<persona>`, `<core_memory>` and `<users>` sections comes from Markdown files in
+`services/lobe_frontal/config/`:
 
-L'édition de ces fichiers permet de modifier le comportement de l'IA en temps réel sans modifier le code source.
+| File | XML section |
+|---|---|
+| `PERSONA.md` | `<persona>` |
+| `MEMORY.md` | `<core_memory>` |
+| `USER.md` | `<users>` |
+
+Edit these files to change the behavior of the entity. You do not have to change the code, and you
+do not have to restart the service.
+
+## 🖼️ Multimodal content
+
+The `PromptBuilder.build()` method makes the message list for the inference:
+
+- It adds the images as `image_url` parts of the user message.
+- It adds the audio as an `input_audio` part, for a raw voice message.
+- It removes each Discord image URL that is expired, or that expires in less than 300 s. An expired
+  URL causes an error at the inference server.
+- It repairs orphan `tool` roles that come from the history. A `tool` message with no related
+  assistant tool call makes the inference fail.

@@ -1,8 +1,16 @@
-# I/O Yeux (Twitch)
+# 👁️ I/O Yeux (Twitch and YouTube)
 
-Le senseur chargé d'observer le monde virtuel.
+The sensor that observes the virtual world.
 
-### Rôle principal :
-- Se connecter à l'API de chat Twitch ou YouTube.
-- Agréger les messages et événements (sub, bits, etc.) pour éviter l'inondation en période de forte affluence.
-- Engendrer des événements synthétiques de type `CHAT_SUMMARY` vers l'Orchestrateur.
+> **Status: specification only.** This directory contains this file. There is no source code.
+
+## 🎯 Planned functions
+
+- Connect to the chat API of Twitch or YouTube.
+- Aggregate the messages and the events (subscriptions, bits, and more). Aggregation prevents an
+  overflow of the context window when the chat is very active.
+- Publish a summary event (`io.chat.msg`) to the orchestrator.
+
+## 🔌 Planned NATS interface
+
+- **Publishes on:** `io.chat.msg`

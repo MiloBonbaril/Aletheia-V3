@@ -1,57 +1,102 @@
-# 🚀 DOCUMENT DE CONCEPTION ARCHITECTURALE : PROJET "NEXUS-V"
+# 🚀 Architecture concept: project "Nexus-V"
 
-**À l'attention de l'équipe d'ingénierie.**
-**Statut :** En production / Évolutif.
+**Audience:** the engineering team.
+**Status:** in operation, and in development.
 
-## 1. VISION DU PROJET
-Création d'une Entité IA Virtuelle (VTubeuse) autonome, proactive et persistante, capable d'interagir en temps réel avec un environnement complexe (voix, texte, chat Twitch, système d'exploitation). Le système garantit une latence ultra-faible, une résilience totale aux crashs isolés, et s'exécute sur une configuration matérielle hybride (Local CPU/GPU + API Cloud).
+## 1. Project vision
 
-## 2. PARADIGME ARCHITECTURAL
-Ce n'est **pas** un monolithe séquentiel. C'est une **Architecture Orientée Événements (Event-Driven)**.
-* **Message Broker Central :** `NATS` (Fire-and-forget, Pub/Sub).
-* **Désynchronisation Intelligente :** Les I/O n'attendent jamais le LLM. L'état du monde est bufferisé, et l'IA réagit aux événements dès qu'elle est disponible.
-* **Exécution Asynchrone :** Streaming de tokens et génération audio chunkée pour masquer la latence d'inférence.
+Build an autonomous virtual AI entity (a VTuber). The entity is proactive and persistent. It
+interacts in real time with a complex environment: voice, text, Twitch chat and the operating
+system. The system keeps a very low latency. It continues to operate when one service fails. It runs
+on a mixed hardware configuration: a local CPU, a local GPU and, if necessary, a cloud API.
 
----
+## 2. Architecture paradigm
 
-## 3. TOPOLOGIE DU MATÉRIEL (Le Split "Gaming / IA")
-Afin de préserver la RTX pour le jeu en direct et le rendu OBS/VTube Studio, l'intelligence est éclatée :
-* **CPU Local :** STT (Whisper via CTranslate2), Vector Database, Orchestrateur (Rust), TTS (via ONNX).
-* **GPU Local :** Jeu vidéo, VTube Studio, OBS (Encodage NVENC).
-* **Cloud (LPU Groq) :** Inférence LLM principale (vitesse extrême, zéro VRAM locale consommée).
+The system is **not** a sequential monolith. It is an **event-driven architecture**.
 
----
+- **Central message broker:** `NATS`, with fire-and-forget publish/subscribe. Four topics use
+  request-reply.
+- **Controlled decoupling:** an I/O service never waits for the LLM. The system buffers the state of
+  the world. The AI reacts to the events when it becomes available.
+- **Asynchronous execution:** the LLM streams its tokens, and the TTS synthesizes small chunks. This
+  hides the inference latency.
 
-## 4. DÉCOUPLAGE DES MICRO-SERVICES (Les Acteurs)
+## 3. Hardware topology
 
-### 🧠 A. LE CORTEX (Orchestrateur)
-* **Langage :** Rust.
-* **Rôle :** Le système nerveux central. Il route les flux d'événements entre les capteurs (I/O) et le noyau cognitif. 
-* **État actuel :** Implémente le routage strict des messages. La *Boucle de Proactivité* et la *Préemption* sont prévues dans la roadmap.
+The intelligence is divided between the devices. This keeps the GPU available for the game and for
+the OBS and VTube Studio rendering.
 
-### 💬 B. LE LOBE FRONTAL (Gestionnaire LLM)
-* **Langage :** Python.
-* **Rôle :** Pilote l'API Groq (Llama 3). 
-* **Ingénierie de Prompt :** Utilise une structure **XML sophistiquée** pour séparer strictement le Persona, la Mémoire Core, les informations Utilisateurs et le Contexte.
-* **Streaming :** Bufferise les tokens, coupe sur la ponctuation forte, et publie les fragments de texte sur le Bus NATS.
+- **Local CPU:** the orchestrator (Rust), the vector database, the TTS (ONNX).
+- **Local GPU:** the LLM inference (llama.cpp), the STT (CTranslate2 with CUDA), the game, VTube
+  Studio and the OBS encoding (NVENC).
+- **Cloud:** not in use. The Groq and Mistral interfaces are present in the code but they are not
+  connected. See `docs/adr/0002-lobe-frontal-stays-llama-cpp-only.md`.
 
-### 📚 C. L'HIPPOCAMPE (Mémoire)
-* **Mémoire Épisodique (RAG) :** Qdrant en local. Recherche passive déclenchée automatiquement à la réception de chaque message utilisateur, avec possibilité de recherche active via Function Calling pour les requêtes complexes.
-* **Mémoire Sémantique :** PostgreSQL (Paramètres, relations viewers, état global).
+The first design used the Groq LPU API for the inference. The project moved to a local llama.cpp
+server, for the cost, the privacy and the control of the model.
 
-### 🎙️ D. LES CORTEX SENSORIELS ET MOTEURS (I/O)
-* **Oreilles (STT) :** Pipeline optimisé : Capture Audio $\rightarrow$ **VAD (Silero)** $\rightarrow$ **STT (CTranslate2/Whisper)**. Crée des événements `io.user.speak`.
-* **Clavier (Text I/O) :** Service d'entrée textuelle directe. Crée des événements `io.user.msg.text`.
-* **Yeux (Twitch) :** Agrégateur de chat pour optimiser la fenêtre de contexte. Crée des événements `io.chat.msg`.
-* **Cordes Vocales (TTS) :** `Kokoro ONNX`. Transforme les fragments de texte en flux audio temps réel.
-* **Visage (VTube Controller) :** Synchronisation labiale (Lip-Sync) et contrôle des expressions via WebSocket vers VTube Studio.
+## 4. The microservices
 
-### 🎛️ E. LE TERMINAL (Frontend d'Administration)
-* **Rôle :** Panneau de contrôle passif pour le monitoring et la modification des paramètres globaux.
+### 🧠 A. The cortex (orchestrator)
 
----
+- **Language:** Rust.
+- **Function:** the central nervous system. It routes the event flows between the sensors (I/O) and
+  the cognitive core.
+- **Status:** it routes the messages, it tracks the sessions with a `correlation_id`, and it routes
+  the proactive triggers from `limbic`. Preemption is in the roadmap.
 
-## 5. RÉFÉRENCES TECHNIQUES
-Pour des détails d'implémentation précis, se référer aux documents suivants :
-- [**NATS_TOPICS.md**](NATS_TOPICS.md) : Contrats de messages et flux.
-- [**PROMPTING.md**](PROMPTING.md) : Schéma XML du Lobe Frontal.
+### 💬 B. The frontal lobe (LLM manager)
+
+- **Language:** Python.
+- **Function:** it controls the local llama.cpp server through an OpenAI-compatible interface.
+- **Prompt engineering:** it uses an XML structure. The structure keeps the persona, the core
+  memory, the user data and the context separate.
+- **Streaming:** it buffers the tokens, cuts the text at strong punctuation marks, and publishes the
+  text fragments on the NATS bus.
+- **Debug TUI:** a Textual interface shows what goes to the LLM, what comes back, and the tool-call
+  activity. See `docs/adr/0001-embedded-tui-in-lobe-frontal.md`.
+
+### 📚 C. The hippocampe (memory)
+
+- **Episodic memory:** PostgreSQL. It keeps the full conversation history.
+- **Semantic memory (RAG):** Qdrant, on the local machine. The search is passive: it starts
+  automatically for each user message. Function calling gives an active search for complex queries.
+
+### 🎭 D. The limbic system (mood and proactivity)
+
+- **Language:** Python.
+- **Function:** it holds the mood state and the boredom gauge. The boredom increases at each tick.
+  It goes to 0 when an interaction starts. When the boredom becomes higher than the threshold,
+  `limbic` asks the frontal lobe for a subject and starts a proactive interaction.
+- **Gates:** a proactive interaction starts only if a person is in a Discord voice channel, and only
+  during the permitted hours.
+
+### 🎙️ E. The sensory and motor services (I/O)
+
+- **Ears (STT):** the pipeline is: audio capture → **Silero VAD** → **CTranslate2 and Whisper**. It
+  creates `io.user.speak` events. It processes the local microphone, and also each speaker of a
+  Discord voice channel.
+- **Keyboard (text I/O):** a direct text input service. It creates `io.user.msg.text` events.
+- **Discord:** the gateway to the users. It sends the text, it streams the voice audio in the two
+  directions, and it publishes the presence signal.
+- **Eyes (Twitch):** a chat aggregator that limits the quantity of context. It will create
+  `CHAT_SUMMARY` events. Not implemented.
+- **Vocal cords (TTS):** `Kokoro ONNX`. It changes the text fragments into a real-time audio stream.
+- **Face (VTube controller):** lip-sync and expression control through a WebSocket to VTube Studio.
+  Not implemented.
+
+### 🎛️ F. The terminal (administration frontend)
+
+- **Function:** a passive control panel for the monitoring and for the global parameters. Not
+  implemented.
+
+### ⚡ G. The benchmark (measurement)
+
+- **Function:** it subscribes to the bus and rebuilds the life cycle of a message. It gives the
+  latency of each step. It is the only correct way to measure a change of performance.
+
+## 5. Technical references
+
+- [**NATS_TOPICS.md**](NATS_TOPICS.md) — message contracts and flows.
+- [**PROMPTING.md**](PROMPTING.md) — the XML schema of the frontal lobe.
+- [**docs/adr/**](docs/adr/) — the architecture decisions and their reasons.

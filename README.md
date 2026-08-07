@@ -1,49 +1,63 @@
 # Project Aletheia
-An Edge-Native Asynchronous Multimodal Orchestration Pipeline
 
-Aletheia is an autonomous, proactive and persistent virtual entity capable of interacting with the world through multiple modalities (text, voice, vision). She is a VTuber and can interact with users through various platforms such as Discord, Twitch, and YouTube.
-Because she is a virtual entity interacting with humans online, she must be able to :
-- hear (STT)
-- see (Computer Vision)
-- think (Large Language Model)
-- remember (memory)
-- speak (TTS)
-- emote (expressions)
-And all of this should be on a real-time basis with high performance and low latency. This is a hard requirement, especially on a consumer PC hardware.
+An edge-native, asynchronous, multimodal orchestration pipeline.
 
-In terms of performance goals, we want to achieve : a time to speech under 300ms from the moment the user stops speaking (for a continuous stream of speech). The LLM should generate its first sentence in under 200ms to let the TTS engine start speaking with minimal delay.
+Aletheia (internal codename "Nexus-V") is an autonomous virtual entity (a VTuber). She interacts
+with users on Discord, and later on Twitch and YouTube. She must:
 
-## Features
+- hear (speech-to-text)
+- see (computer vision)
+- think (a large language model)
+- remember (episodic and semantic memory)
+- speak (text-to-speech)
+- show emotions (avatar expressions)
 
-- Multimodal input (audio, text, video)
-- Multimodal output (audio, text, video)
-- Can use remote LLM (Groq) or local LLM (Gemma 4)
-- Real-time processing
-- Low latency (< 300ms time to first response)
-- Persistent memory
-- Edge-native (can run on consumer hardware, more details below)
-- Asynchronous
-- Higly monitored (dashboard, logs, metrics)
-- Proactive and autonomous
+The system does all of these tasks in real time on consumer hardware.
+
+## Performance targets
+
+| Metric | Target |
+|---|---|
+| Time to first audio, after the user stops to speak | less than 300 ms |
+| Time to first token from the LLM | less than 200 ms |
+
+Measure each change that can have an effect on latency. Use the `benchmark` service. Do not
+measure by hand.
+
+## Status
+
+| Service | Directory | Language | Status |
+|---|---|---|---|
+| cortex (orchestrator) | `services/cortex` | Rust | Operational |
+| lobe_frontal (LLM engine) | `services/lobe_frontal` | Python | Operational |
+| hippocampe (memory) | `services/hippocampe` | Python | Operational |
+| limbic (mood and proactivity) | `services/limbic` | Python | Operational |
+| io_oreilles (ears, STT) | `services/io_oreilles` | Rust | Operational |
+| io_voix (voice, TTS) | `services/io_voix` | Python | Operational |
+| io_discord (Discord gateway) | `services/io_discord` | Python | Operational |
+| io_text (terminal input) | `services/io_text` | Python | Operational |
+| benchmark (latency harness) | `services/benchmark` | Python | Operational |
+| io_yeux (eyes, chat aggregation) | `services/io_yeux` | — | Specification only |
+| io_visage (VTube Studio control) | `services/io_visage` | — | Specification only |
+| terminal (admin dashboard) | `services/terminal` | — | Specification only |
+
+The three last services contain a README file only. They have no source code.
 
 ## Architecture
 
-To achieve such performance goals, we will use a microservices architecture based on Rust for the orchestration layer and Python for the AI layer. The microservices will communicate with each other using NATS on an event bus. The database will be a PostgreSQL database with Qdrant for vector storage. Microservices are made to mimic the human brain.
+The system is a set of microservices. Rust does the orchestration and the audio capture. Python
+does the AI work. The services communicate only through the **NATS** event bus. There is no direct
+call between two services. Each service starts, stops and fails independently.
 
-The microservices are:
-- **cortex** (directory: `services/cortex`): the orchestration layer written in Rust.
-- **frontal_lobe** (directory: `services/lobe_frontal`): the LLM layer written in Python.
-- **hippocampus** (directory: `services/hippocampe`): the memory layer written in Python.
-- **ears** (directory: `services/io_oreilles`): the STT layer written in Rust.
-- **voice** (directory: `services/io_voix`): the TTS layer written in Python.
-- **discord** (directory: `services/io_discord`): the Discord integration layer used by humans to chat with Aletheia during the development process, written in Python.
-- **text** (directory: `services/io_text`): the direct terminal text interaction layer written in Python.
-- **eyes** (directory: `services/io_yeux` - not fully implemented yet): the computer vision layer written in Rust.
-- **visage** (directory: `services/io_visage` - not fully implemented yet): the VTuber model integration layer written in Python.
-- **terminal** (directory: `services/terminal` - not fully implemented yet): the terminal dashboard used to monitor, debug, and interact with microservices, written in NextJS and TypeScript.
-- **twitch** & **youtube** (planned): integration layers for streaming platforms.
+The LLM inference runs on a local **llama.cpp** server (see `docs/adr/0002-lobe-frontal-stays-llama-cpp-only.md`).
+The `Groq/` and `Mistral/` interfaces in `lobe_frontal` are not connected. Do not remove them, and
+do not connect them.
 
-Those microservices work as follows:
+Two reference documents give the details:
+
+- [`NATS_TOPICS.md`](NATS_TOPICS.md) — all topics, payloads and message flows.
+- [`PROMPTING.md`](PROMPTING.md) — the XML schema of the system prompt.
+
 ```mermaid
 flowchart TB
     %% Styling definitions
@@ -56,139 +70,186 @@ flowchart TB
 
     subgraph Sensory_Ingress ["📥 SENSORY INGRESS (Inputs)"]
         direction LR
-        oreilles["🎙️ io_oreilles (Ears / STT)<br/><i>Rust / Whisper / VAD</i>"]:::ingress
+        oreilles["🎙️ io_oreilles (Ears / STT)<br/><i>Rust / Silero VAD / Whisper</i>"]:::ingress
         discord["💬 io_discord (Discord)<br/><i>Python / discord.py</i>"]:::ingress
         text_io["⌨️ io_text (Text I/O)<br/><i>Python / CLI</i>"]:::ingress
-        yeux["👁️ io_yeux (Eyes / Vision - Planned)<br/><i>Rust</i>"]:::ingress
+        yeux["👁️ io_yeux (Eyes / Chat - Planned)"]:::ingress
     end
 
     subgraph Event_Broker ["📡 EVENT BUS"]
-        nats["NATS Message Broker<br/><i>Asynchronous Pub/Sub Pipeline</i>"]:::broker
+        nats["NATS Message Broker<br/><i>Asynchronous Pub/Sub</i>"]:::broker
     end
 
     subgraph Cognition ["🧠 COGNITION & ORCHESTRATION"]
-        cortex["🧠 cortex (Cortex / Orchestrator)<br/><i>Rust Central Router</i>"]:::core
-        lobe["💬 lobe_frontal (Frontal Lobe)<br/><i>Python / LLM Manager</i>"]:::core
-        hippocampe["📚 hippocampe (Hippocampus)<br/><i>Python Memory Manager</i>"]:::core
+        cortex["🧠 cortex (Orchestrator)<br/><i>Rust router</i>"]:::core
+        lobe["💬 lobe_frontal (Frontal Lobe)<br/><i>Python / LLM manager + TUI</i>"]:::core
+        hippocampe["📚 hippocampe (Hippocampus)<br/><i>Python memory manager</i>"]:::core
+        limbic["🎭 limbic (Limbic System)<br/><i>Python / mood + boredom</i>"]:::core
     end
 
     subgraph Storage ["💾 PERSISTENT STORAGE"]
-        qdrant[("🔍 Qdrant Vector DB<br/><i>Semantic Memory / RAG</i>")]:::database
-        postgres[("🗄️ PostgreSQL DB<br/><i>Episodic Memory / Conversation state</i>")]:::database
+        qdrant[("🔍 Qdrant Vector DB<br/><i>Semantic memory / RAG</i>")]:::database
+        postgres[("🗄️ PostgreSQL DB<br/><i>Conversation history</i>")]:::database
     end
 
-    subgraph Compute_API ["⚡ COMPUTE SERVICES"]
-        groq["⚡ Groq LPU API<br/><i>Ultra-low Latency Llama 3</i>"]:::external
-        local["⚡ Local CPU/GPU <br/><i>Local processing for cost saving and privacy (Gemma 4)</i>"]:::external
+    subgraph Compute_API ["⚡ INFERENCE"]
+        local["⚡ Local llama.cpp server<br/><i>OpenAI-compatible, GPU</i>"]:::external
     end
 
     subgraph Motor_Egress ["📤 MOTOR EGRESS (Outputs)"]
         direction LR
         voix["🔊 io_voix (Voice / TTS)<br/><i>Python / Kokoro ONNX</i>"]:::egress
-        visage["👤 io_visage (Visage / Expression - Planned)<br/><i>Python VTube Controller</i>"]:::egress
+        visage["👤 io_visage (Expression - Planned)"]:::egress
     end
 
-    subgraph External_Render ["🎭 RENDER ENGINE"]
-        vtube["🎭 VTube Studio<br/><i>Live expression render</i>"]:::external
+    subgraph Observability ["🎛️ OBSERVABILITY"]
+        bench["⚡ benchmark<br/><i>Python / latency graphs</i>"]:::core
+        terminal["🎛️ terminal (Admin Panel - Planned)"]:::core
     end
 
-    subgraph Monitoring ["🎛️ MONITORING"]
-        terminal["🎛️ terminal (Admin Panel)<br/><i>NextJS / TS Dashboard</i>"]:::core
-    end
+    %% Ingress
+    oreilles -->|io.user.speak<br/>io.user.speak.raw| nats
+    discord -->|io.user.msg.text<br/>io.discord.voice.frame<br/>io.presence.discord_voice| nats
+    text_io -->|io.user.msg.text| nats
+    yeux -.->|io.chat.msg| nats
 
-    %% Event Bus Connections
-    oreilles -->|Publishes<br/>io.user.speak| nats
-    discord -->|Publishes<br/>io.user.msg.text| nats
-    text_io -->|Publishes<br/>io.user.msg.text| nats
-    yeux -.->|Publishes<br/>io.chat.msg| nats
+    nats -->|ingress events| cortex
+    nats -->|io.discord.voice.frame| oreilles
 
-    nats -->|Routes ingress events to| cortex
-
-    %% Cognitive Flows (Passive Memory Architecture)
-    cortex -->|Publishes<br/>cortex.prompt +<br/>hippocampe.context.build| nats
+    %% Cognition
+    cortex -->|cortex.prompt +<br/>hippocampe.context.build<br/>cortex.interaction.started| nats
     nats -->|context.build| hippocampe
     hippocampe <-->|Vector search / upsert| qdrant
-    hippocampe <-->|Relational queries| postgres
-    hippocampe -->|Publishes<br/>hippocampe.context.ready| nats
+    hippocampe <-->|History read / write| postgres
+    hippocampe -->|hippocampe.context.ready| nats
 
     nats -->|cortex.prompt +<br/>context.ready| lobe
+    lobe <-->|Streamed tokens| Compute_API
+    lobe -->|lobe.fragment_stream| nats
 
-    lobe <-->|Streaming tokens inference| Compute_API
-    lobe -->|Publishes fragments<br/>lobe.fragment_stream| nats
+    %% Limbic loop
+    nats -->|cortex.interaction.started<br/>io.presence.discord_voice<br/>limbic.mood.set| limbic
+    limbic -->|limbic.mood.update<br/>limbic.proactive.trigger| nats
+    limbic <-->|lobe.topic.generate<br/>request-reply| lobe
 
-    %% Motor Egress Flows
-    nats -->|Subscribes to stream| voix
-    nats -->|Subscribes to stream| visage
+    %% Egress
+    nats -->|lobe.fragment_stream| voix
+    voix -->|io.voice.speak.start/.audio/.end| nats
+    nats -->|io.voice.speak.audio| discord
+    nats -.->|fragments| visage
 
-    visage -->|WebSocket / Lip-sync & emotion| vtube
-
-    %% Terminal Monitoring
-    terminal <-->|Monitor streams & states| nats
+    %% Observability
+    nats -->|passive subscription| bench
+    terminal -.->|monitoring| nats
 ```
+
+## Message flow
+
+A user message causes this sequence:
+
+1. An I/O service publishes the message on an ingress topic.
+2. The cortex dispatches `cortex.prompt` and `hippocampe.context.build` in parallel.
+3. The hippocampe reads the history and the RAG memory in parallel, then publishes
+   `hippocampe.context.ready`.
+4. The lobe_frontal waits for the context, then starts the inference.
+5. The lobe_frontal cuts the answer at punctuation marks. It publishes each fragment on
+   `lobe.fragment_stream`.
+6. The io_voix service speaks each fragment. The io_discord service sends the same text and audio
+   to Discord.
 
 ## How to run Aletheia
 
 ### Prerequisites
-- Docker
-- Docker Compose
-- Rust >= 2024
-- Python >= 3.12
+
+- Docker and Docker Compose
+- Rust (edition 2021 and 2024)
+- Python 3.12 or higher
+- A local llama.cpp server for the LLM inference
+- `ffmpeg` on the PATH, for the Discord voice functions
 
 ### Steps
+
 1. Clone the repository:
-```bash
-git clone git@github.com:MiloBonbaril/Aletheia-V3.git
-```
-2. Navigate to the project directory:
-```bash
-cd Aletheia-V3
-```
-3. Run the event bus:
-```bash
-docker compose up -d
-```
-4. Run any microservice you want (the cortex must run to orchestrate everything):
-```bash
-cd services/<service-name>
-python main.py
-# or (for rust based services)
-cargo run
-```
+   ```bash
+   git clone git@github.com:MiloBonbaril/Aletheia-V3.git
+   cd Aletheia-V3
+   ```
+2. Start the event bus:
+   ```bash
+   docker compose up -d          # NATS: 4222 (clients), 8222 (monitoring)
+   ```
+3. Start the datastores of the hippocampe:
+   ```bash
+   cd services/hippocampe && docker compose up -d   # PostgreSQL 5432, Qdrant 6333/6334
+   ```
+4. Start each service that you need. The cortex is always necessary.
+   ```bash
+   cd services/<name>
+   pip install -r requirements.txt && python main.py   # Python services
+   cargo run --release                                 # Rust services
+   ```
+
+Each service has its own `requirements.txt` or `Cargo.toml`. There is no shared build system and no
+shared virtual environment.
 
 ### How to stop Aletheia
-kill every service and docker containers:
+
+Stop each service, then stop the containers:
+
 ```bash
 docker compose down
 ```
 
+## Tests
+
+There is no repository-level test runner. Some services have their own tests:
+
+```bash
+cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
+cd services/cortex && cargo test        # cortex
+```
+
 ## Benchmarks
 
-### Hardware used for benchmarks:
-Laptop running the entire project:
-- Processor: AMD Ryzen 5 5500U
-- Graphics Card: integrated AMD Radeon Graphics
-- RAM: 16 GB
-- SSD: 512 GB
-- OS: Arch Linux
-- Wi-Fi
+The `benchmark` service subscribes to NATS and reconstructs the full life cycle of a message. Use it
+to measure the effect of a change on the latency.
 
-Desktop PC running the local LLM (Gemma 4 E2B) via llama.cpp:
-- Processor: AMD Ryzen 9 5950X
-- Graphics Card: NVIDIA RTX 5070ti (16 GB)
-- RAM: 32 GB (DDR4)
-- SSD: 512 GB
-- OS: Windows 11
-- Wi-Fi
-
-### Benchmark Results
-
-The `benchmark` service is located in the `services/benchmark` directory and is used to benchmark Aletheia continuously and automatically, ensuring performance requirements are met.
-
-#### V1.0 First benchmark implementation
-
-Here are the E2E benchmark results:
+```bash
+cd services/benchmark
+pip install -r requirements.txt
+python main.py                          # default graph: graphs/E2E.json
+python main.py graphs/T2T.json          # text-to-text only
 ```
-🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
+
+### Hardware used for the measurements
+
+Desktop computer that runs the pipeline, the local LLM and the STT:
+
+- CPU: AMD Ryzen 9 5950X
+- GPU: NVIDIA RTX 5070 Ti (16 GB)
+- RAM: 32 GB DDR4
+- OS: Arch Linux, Wi-Fi connection
+
+### Speech-to-text (io_oreilles)
+
+The measurement uses 28 real segments (61.9 s of audio) and the `whisper-small` model.
+
+| Device | Median | p90 | Max | Real-time factor |
+|---|---|---|---|---|
+| CPU (OpenBLAS, 16 threads) | 10038 ms | 12935 ms | 20123 ms | 4.64× |
+| GPU (CUDA) | **97 ms** | 117 ms | 180 ms | **0.042×** |
+
+The CPU is 4.6 times slower than real time. Thus the GPU is not an option, it is a condition to use
+the voice mode. See `services/io_oreilles/README.md`.
+
+### End-to-end history
+
+These results come from the successive optimization steps of the pipeline. The service prints the
+labels in French.
+
+#### V1.0 — first implementation
+
+```
   ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
   ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 8.6 ms
   ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 3.13 s
@@ -197,66 +258,35 @@ Here are the E2E benchmark results:
   ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 11.71 s
 ```
 
-Thus, we can observe that:
-1. The LLM receives the message in 8.6 ms, which is impressive.
-2. The LLM starts generating tokens in 3.12 s, which is quite high and needs to be reduced.
-3. The TTS finishes its first synthesis in 1.55 s, resulting in a total of 4.68 s after the user's message is sent.
-4. The LLM finishes its generation before the TTS finishes reading the first fragment.
+The cortex routed the message in 8.6 ms. The LLM was too slow: 3.13 s before the first token. The
+total time to first audio was 4.68 s.
 
-A latency of 4.68 s is long for a real-time conversation; this needs to be reduced. However, for a first test on such hardware, it is quite promising!
+#### V1.1 — TTS optimization
 
-The next goal is to reduce the LLM latency for the TTFT to under 2 seconds, and reduce the TTS synthesis time to under 1 second. This would give us a total latency of less than 3 seconds.
-
-#### V1.1 TTS Optimization
-
-After redesigning the TTS and allowing the models to warm up, we obtain the following results:
 ```
-🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
-  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
   ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 10.0 ms
   ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 505.5 ms
-  ▶ Dernier Fragment LLM (lobe.fragment_stream) | Latence absolue: 633.6 ms
   ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 1.03 s
-  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 10.40 s
-```
-The "time to first audio" is reduced to 1 second, which is perfectly acceptable for a real-time conversation.
-
-However, the "time to first token" does not seem to be stable, as shown by this result:
-```
-🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
-  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
-  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 1.8 ms
-  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 2.11 s
-  # no last fragment because the message was "OK" (which means only one token, and should be fast)
-  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 2.40 s
-  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 2.96 s
 ```
 
-This final result still shows that the TTS latency dropped below 290.4 ms, which is excellent. However, there is an issue with the LLM, which is neither stable nor fast enough.
+A new TTS design, and a warm-up of the models, decreased the time to first audio to 1 s. The
+synthesis of one fragment went below 300 ms. But the time to first token was not stable: another
+run of the same test gave 2.11 s.
 
+#### V1.2 — LLM optimization
 
-### V1.2 LLM Optimization
-
-After redesigning the LLM part we obtained the following results:
 ```
-🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
-  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
-  ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 6.9 ms
-  ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 832.6 ms
-  ▶ Dernier Fragment LLM (lobe.fragment_stream) | Latence absolue: 875.4 ms
-  ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 3.11 s
-  ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 10.36 s
-```
-and:
-```
-🚀 [NOUVEAU FLUX DÉTECTÉ] sur io.user.msg.text
-  ▶ Entrée Utilisateur (io.user.msg.text) | Latence absolue: 0 µs
   ▶ Aiguillage Cortex (cortex.prompt) | Latence absolue: 1.4 ms
   ▶ Premier Fragment (TTFT) (lobe.fragment_stream) | Latence absolue: 424.8 ms
-  # "sprint test" only generating "OK"
   ▶ Début Lecture Voix (io.voice.speak.start) | Latence absolue: 744.3 ms
   ▶ Fin Lecture Voix (io.voice.speak.end) | Latence absolue: 1.31 s
 ```
 
-This results shows great improvements, with the "time to first token" dropping to 424.8 ms, and "time to first audio" dropping to 744.3 ms, which is excellent for a real-time conversation.
-This also shows that the TTFT is much more stable now, the difference between the two results is mainly due to the fact that "sprint test" is a very short message that only generate "OK".
+The time to first token decreased to 424.8 ms, and it became stable. The time to first audio
+decreased to 744.3 ms.
+
+### Model selection
+
+The `lobe_frontal` service contains a separate bench for the local models. It measures the speed and
+the behavior of each candidate model. See the section "Model bench" in
+`services/lobe_frontal/README.md`.
