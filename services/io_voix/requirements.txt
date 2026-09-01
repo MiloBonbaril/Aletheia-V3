@@ -1,6 +1,10 @@
 nats-py
 asyncio
 kokoro-onnx
+# kokoro-onnx dépend de `onnxruntime` (CPU). Pour la synthèse sur GPU, remplacez-le
+# APRÈS cette installation — les deux paquets partagent le même module `onnxruntime` :
+#   pip uninstall -y onnxruntime && pip install onnxruntime-gpu
+# Sans ce remplacement, main.py démarre sur CPU (repli automatique).
 sounddevice
 soundfile
 numpy

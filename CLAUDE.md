@@ -63,7 +63,8 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `io.user.speak`. With `--discord`, it processes the per-speaker PCM audio from `io_discord`
   instead of the local microphone. The GPU build (`--features cuda`) is necessary for real-time
   speech.
-- **io_voix** (Python) — TTS with Kokoro ONNX. It consumes `lobe.fragment_stream`. It publishes the
+- **io_voix** (Python) — TTS with Kokoro ONNX on the GPU (`CUDAExecutionProvider`), with a fallback
+  to the CPU. It consumes `lobe.fragment_stream`. It publishes the
   audio on `io.voice.speak.audio`, and the time references on `io.voice.speak.start` and `.end`. It
   downloads the model weights (approximately 350 MB) into `models/` at the first start.
 - **io_discord** (Python) — the Discord gateway (`bot.py`, cogs in `cogs/`). It bridges Discord and
@@ -147,7 +148,8 @@ the address `nats://localhost:4222` in their source code.
   `PROACTIVE_GATE_START_HOUR`, `PROACTIVE_GATE_END_HOUR`
 - io_discord: `DISCORD_TOKEN`, `DISCORD_USER_ID`, `DISCORD_GUILD_ID`, `TEXT_CHANNEL_ID`,
   `COMMAND_PREFIX`
-- io_voix: `KOKORO_VOICE`, `KOKORO_SPEED`, `KOKORO_MODELS_DIR`, `MUTE_LOCAL_PLAYBACK`
+- io_voix: `KOKORO_VOICE`, `KOKORO_SPEED`, `KOKORO_MODELS_DIR`, `MUTE_LOCAL_PLAYBACK`,
+  `KOKORO_CPU_THREADS`
 - io_oreilles: `STT_LANGUAGE`, `STT_MODEL_PATH`, `RAW_AUDIO`, `ORT_DYLIB_PATH`
 
 ## Work between services

@@ -143,7 +143,7 @@ class Voice(commands.Cog):
 
         # ffmpeg auto-detects the WAV header and resamples/upmixes to the
         # 48kHz stereo s16le Discord voice requires, regardless of io_voix's
-        # native 22050Hz mono — same ffmpeg binary pcm_to_mp3() already relies on.
+        # native rate (24kHz mono) — same ffmpeg binary pcm_to_mp3() already relies on.
         vc.play(discord.FFmpegPCMAudio(io.BytesIO(audio), pipe=True), after=after)
         await done.wait()
 

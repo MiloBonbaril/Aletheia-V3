@@ -10,6 +10,10 @@ import numpy as np
 import sounddevice as sd
 import onnxruntime as ort
 from kokoro_onnx import Kokoro
+# Fréquence de sortie réelle du modèle : lue chez kokoro_onnx plutôt que recopiée ici.
+# Une valeur en dur (22050) désaccordait la lecture de 9 % — voix grave et énoncés
+# d'autant plus longs — parce que `kokoro.create()` rend du 24 kHz.
+from kokoro_onnx.config import SAMPLE_RATE
 
 from audio import encode_wav_b64
 
@@ -20,7 +24,6 @@ VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/mode
 
 VOICE_NAME = os.getenv("KOKORO_VOICE", "ff_siwis")
 SPEECH_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
-SAMPLE_RATE = 22050  # Fréquence native de Kokoro
 MUTE_LOCAL_PLAYBACK = os.getenv("MUTE_LOCAL_PLAYBACK", "false").lower() in ("1", "true")
 
 # Isolation totale de l'inférence (1 seul thread Python pour piloter ONNX)
@@ -39,28 +42,58 @@ def ensure_models():
         urllib.request.urlretrieve(VOICES_URL, voices_path)
     return model_path, voices_path
 
-# ================= Configuration ONNX Spécial Zen 2 =================
-def build_optimized_kokoro(model_path, voices_path):
-    """
-    Configure ONNX Runtime spécifiquement pour l'architecture du Ryzen 5 5500U.
-    """
+# ================= Session ONNX : GPU d'abord, CPU en repli =================
+# Mesuré sur RTX 5070 Ti / Ryzen 9 5950X, fragment court (0,7 s d'audio) :
+# CPU 6 threads 227 ms, CUDA 35 ms. La synthèse du fragment 0 est le poste
+# dominant du time-to-first-audio, d'où le GPU par défaut.
+CPU_THREADS = int(os.getenv("KOKORO_CPU_THREADS", "6"))
+
+
+def _cpu_session_options():
+    """Réglages CPU : un thread intra-op par cœur physique, sans SMT (le SMT sature le cache L3)."""
     opts = ort.SessionOptions()
-    
-    # 6 cœurs physiques = 6 threads intra-op. On évite le SMT (12 threads) qui sature le cache L3.
-    opts.intra_op_num_threads = 6
+    opts.intra_op_num_threads = CPU_THREADS
     opts.inter_op_num_threads = 1
-    
+
     # Mode d'exécution séquentiel pour réduire l'overhead de scheduling interne
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    
-    # Optimisations matérielles maximales (AVX2/FMA présents sur ton 5500U)
+
+    # Optimisations matérielles maximales (AVX2/FMA)
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    
+
     # Stratégie d'allocation mémoire agressive
     opts.add_session_config_entry("session.allocator.alloc_granularity", "1")
-    
-    # Initialisation de Kokoro avec notre session customisée
-    session = ort.InferenceSession(model_path, sess_options=opts, providers=["CPUExecutionProvider"])
+    return opts
+
+
+def build_optimized_kokoro(model_path, voices_path):
+    """Construit la session Kokoro sur CUDA si possible, sinon sur CPU.
+
+    Le repli est nécessaire, pas décoratif : `CUDAExecutionProvider` peut figurer dans
+    get_available_providers() et faire quand même échouer la création de session (cuDNN
+    introuvable, pilote incompatible). Sans repli, le service vocal ne démarre plus du tout.
+    """
+    if "CUDAExecutionProvider" in ort.get_available_providers():
+        try:
+            # Charge les CUDA/cuDNN livrés par les wheels pip nvidia (dépendances de torch) :
+            # ORT les cherche sous leur nom non versionné (libcudnn.so), absent de ces wheels.
+            # Évite d'imposer un LD_LIBRARY_PATH au lancement du service.
+            ort.preload_dlls()
+            session = ort.InferenceSession(
+                model_path,
+                sess_options=ort.SessionOptions(),
+                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+            )
+            if "CUDAExecutionProvider" in session.get_providers():
+                print("🟢 Kokoro sur GPU (CUDAExecutionProvider).")
+                return Kokoro.from_session(session, voices_path)
+        except Exception as e:
+            print(f"⚠️ Session CUDA impossible ({e}) — repli sur CPU.")
+
+    print(f"🔵 Kokoro sur CPU ({CPU_THREADS} threads intra-op).")
+    session = ort.InferenceSession(
+        model_path, sess_options=_cpu_session_options(), providers=["CPUExecutionProvider"]
+    )
     return Kokoro.from_session(session, voices_path)
 
 # ================= Worker Audio Ultra-Basse Latence =================
