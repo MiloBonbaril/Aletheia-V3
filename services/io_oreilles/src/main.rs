@@ -490,7 +490,16 @@ async fn main() -> Result<()> {
             device: stt_device(),
 
             // 2. Le Moteur Mathématique
-            compute_type: ct2rs::ComputeType::AUTO,
+            // INT8 sur les poids, accumulation en float16. CTranslate2 quantise au
+            // chargement ; le modèle sur disque reste en float16.
+            // Attention : `AUTO` choisit déjà int8_float16 sur cette carte, donc ce
+            // réglage ne fait rien gagner ici. Il fige le budget VRAM au lieu de le
+            // laisser dépendre du GPU : mesuré sur large-v3-turbo, 1602 Mio en
+            // int8_float16 contre 2658 Mio en float16 forcé. Un écart de 1 Go décide
+            // si le STT tient sur la carte à côté de gemma et de Kokoro.
+            // ponytail: pas de branche CPU. Sans support float16, CTranslate2 retombe
+            // seul sur int8_float32 — et le CPU n'est de toute façon pas temps réel ici.
+            compute_type: ct2rs::ComputeType::INT8_FLOAT16,
 
             // 3. Le Cerveau (L'ex-intra_threads)
             num_threads_per_replica: 16,
@@ -508,7 +517,7 @@ async fn main() -> Result<()> {
             cpu_core_offset: -1,
         };
         let model_path = std::env::var("STT_MODEL_PATH")
-            .unwrap_or_else(|_| "model/whisper-small-ct2".to_string());
+            .unwrap_or_else(|_| "model/whisper-large-turbo-ct2".to_string());
         let whisper = ct2rs::Whisper::new(&model_path, whisper_config)
             .with_context(|| format!("Failed to load Whisper model from {model_path}. See README."))?;
         let whisper_options = ct2rs::WhisperOptions::default();

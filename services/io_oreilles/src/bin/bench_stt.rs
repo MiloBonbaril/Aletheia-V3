@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     let dir = PathBuf::from(arg("--dir").context("--dir <répertoire de WAV> requis")?);
     let device = arg("--device").unwrap_or_else(|| "cpu".to_string());
     let repeats: usize = arg("--repeats").and_then(|v| v.parse().ok()).unwrap_or(3);
-    let model = arg("--model").unwrap_or_else(|| "model/whisper-small-ct2".to_string());
+    let model = arg("--model").unwrap_or_else(|| "model/whisper-large-turbo-ct2".to_string());
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?
         .flatten()
@@ -66,11 +66,23 @@ fn main() -> Result<()> {
         _ => ct2rs::Device::CPU,
     };
 
+    // Le service tourne en int8_float16 (cf. src/main.rs) : c'est le défaut ici aussi.
+    // `--compute auto` sert à remesurer l'ancienne base float16 sur le même corpus,
+    // sinon la comparaison small/turbo mélangerait deux changements à la fois.
+    let compute = arg("--compute").unwrap_or_else(|| "int8_float16".to_string());
+    let ct2_compute = match compute.as_str() {
+        "auto" => ct2rs::ComputeType::AUTO,
+        "float16" => ct2rs::ComputeType::FLOAT16,
+        "int8" => ct2rs::ComputeType::INT8,
+        "int8_float16" => ct2rs::ComputeType::INT8_FLOAT16,
+        other => anyhow::bail!("--compute inconnu: {other}"),
+    };
+
     // Mêmes réglages que le service (cf. src/main.rs) pour que le chiffre mesuré
     // soit celui qu'on vivra en production, pas celui d'une config de bench.
     let config = ct2rs::Config {
         device: ct2_device,
-        compute_type: ct2rs::ComputeType::AUTO,
+        compute_type: ct2_compute,
         num_threads_per_replica: arg("--threads").and_then(|v| v.parse().ok()).unwrap_or(16),
         tensor_parallel: false,
         device_indices: vec![0],
@@ -85,7 +97,7 @@ fn main() -> Result<()> {
     let options = ct2rs::WhisperOptions::default();
     let lang: Option<String> = std::env::var("STT_LANGUAGE").ok();
 
-    println!("device={device} model={model} fichiers={} répétitions={repeats}", files.len());
+    println!("device={device} compute={compute} model={model} fichiers={} répétitions={repeats}", files.len());
     println!("chargement du modèle: {load_ms:.0} ms\n");
 
     // Warm-up : première inférence (alloc CUDA, caches) exclue des stats.

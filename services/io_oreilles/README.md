@@ -28,6 +28,17 @@ The `model/` directory is not in git. Get the model one time:
 
 ```bash
 pip install huggingface_hub
+python -c "from huggingface_hub import snapshot_download; snapshot_download('deepdml/faster-whisper-large-v3-turbo-ct2', local_dir='model/whisper-large-turbo-ct2')"
+```
+
+This repository contains `preprocessor_config.json`. Do not replace it with the file of a different
+model size. `large-v3-turbo` uses **128 mel bands**, and `small` uses 80. ct2rs reads the number of
+bands from this file. A file that does not agree with the weights gives a shape error or a bad
+transcription.
+
+To use `whisper-small` again, get it with the commands below and set `STT_MODEL_PATH`:
+
+```bash
 python -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-small', local_dir='model/whisper-small-ct2')"
 # ct2rs needs preprocessor_config.json. The Systran repository does not contain it:
 python -c "from huggingface_hub import hf_hub_download; import shutil; shutil.copy(hf_hub_download('openai/whisper-small','preprocessor_config.json'), 'model/whisper-small-ct2/preprocessor_config.json')"
@@ -39,7 +50,7 @@ python -c "from huggingface_hub import hf_hub_download; import shutil; shutil.co
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | The address of the NATS broker. |
 | `STT_LANGUAGE` | — | The transcription language, for example `fr`. |
-| `STT_MODEL_PATH` | `model/whisper-small-ct2` | The path of the CTranslate2 model. |
+| `STT_MODEL_PATH` | `model/whisper-large-turbo-ct2` | The path of the CTranslate2 model. |
 | `RAW_AUDIO` | not set | Set it to `1` or `true` to publish the raw audio on `io.user.speak.raw` and to skip the transcription. |
 | `ORT_DYLIB_PATH` | found automatically | The path of `libonnxruntime.so`. |
 
@@ -78,6 +89,16 @@ The command builds CTranslate2 with CUDA. It takes approximately 3 minutes. Two 
 Without the `cuda` feature, the binary stays on the CPU with OpenBLAS. The build selects the device
 (`stt_device()`). You cannot change it during operation.
 
+### Compute type
+
+The service asks for `INT8_FLOAT16` (`src/main.rs`). CTranslate2 quantizes the weights to 8-bit
+integers when it loads the model, and it computes in 16-bit floating point. The model on disk stays
+in float16.
+
+On an RTX 5070 Ti, `AUTO` selects `int8_float16` too. Thus this setting changes nothing on this
+card. It makes the VRAM budget the same on each card, because `AUTO` can select a different type on
+different hardware. The difference is large: see the table below.
+
 ### STT benchmark
 
 ```bash
@@ -85,17 +106,38 @@ cargo run --release --bin bench_stt -- --dir /path/to/wavs --device cpu
 cargo run --release --features cuda --bin bench_stt -- --dir /path/to/wavs --device cuda
 ```
 
-Measured on 28 real segments (61.9 s of audio), with `whisper-small`, on an RTX 5070 Ti and 32
-cores:
+| Option | Default | Function |
+|---|---|---|
+| `--dir` | — | The directory of the 16 kHz mono WAV files. |
+| `--device` | `cpu` | `cpu` or `cuda`. |
+| `--model` | `model/whisper-large-turbo-ct2` | The path of the model. |
+| `--compute` | `int8_float16` | `auto`, `float16`, `int8` or `int8_float16`. |
+| `--repeats` | 3 | The number of measurements for each file. |
+| `--threads` | 16 | The CPU threads for each replica. |
 
-| Device | Median | p90 | Max | Real-time factor |
-|---|---|---|---|---|
-| CPU (OpenBLAS, 16 threads) | 10038 ms | 12935 ms | 20123 ms | 4.64× |
-| GPU (CUDA) | **97 ms** | 117 ms | 180 ms | **0.042×** |
+Measured on 20 French segments (64.7 s of audio), on an RTX 5070 Ti, with automatic language
+detection. The VRAM column is the peak of the process alone, from `nvidia-smi`:
+
+| Model | Compute type | Median | p90 | Max | Real-time factor | VRAM |
+|---|---|---|---|---|---|---|
+| `whisper-small` | int8_float16 | **78 ms** | 98 ms | 111 ms | 0.025× | 770 MiB |
+| `large-v3-turbo` | int8_float16 | **165 ms** | 174 ms | 179 ms | 0.051× | 1602 MiB |
+| `large-v3-turbo` | float16 | 184 ms | 192 ms | 197 ms | 0.056× | 2658 MiB |
+
+`large-v3-turbo` costs 87 ms and 832 MiB more than `small`. It has the encoder of `large-v3` (32
+layers) but only 4 decoder layers, thus it stays far from the cost of the full `large-v3`. The int8
+weights save 1056 MiB and 19 ms against float16.
+
+An older measurement on 28 real segments (61.9 s), with `whisper-small`, gives 10038 ms as the
+median on the CPU (OpenBLAS, 16 threads), which is 4.64 times the real time. The CPU is not usable
+for a conversation.
 
 Whisper fills each segment to a window of 30 s. Thus the length of the segment has almost no effect
-on the cost. The CPU runs at 4.6 times the real time, which is not usable for a conversation. The
-GPU gives the necessary margin for the end-to-end budget.
+on the cost.
+
+These times are not in the 300 ms end-to-end budget. `io.user.speak` is an ingress point of the
+benchmark graph, thus the budget starts after the transcription. The VAD adds 600 ms of silence
+before the transcription starts (`SILENCE_FRAMES_TO_END` in `src/segmenter.rs`).
 
 ## 📁 Source files
 
