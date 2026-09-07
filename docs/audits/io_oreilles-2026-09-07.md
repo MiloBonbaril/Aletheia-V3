@@ -128,21 +128,31 @@ cases, thus a short segment and a long segment have almost the same cost.
 
 But a segment with no speech gives an invented text.
 
-### 3.4 A VAD error makes the entity speak
+### 3.4 A short sound makes the entity speak
 
-The audit made the exact shape of a VAD false decision: one speech frame, then the silence tail of
-21 frames. This gives 0.672 s of audio.
+The audit first made synthetic noise: digital silence, white noise at −50 dB and −35 dB, and a short
+click. **Silero refuses all four.** The maximum probability stays between 0.01 and 0.10, thus the
+segmenter never opens a segment. A door or a key on a keyboard is therefore not sufficient. The
+first version of this audit said the opposite; the measurement corrects it.
 
-| Input | Text that Whisper gives |
-|---|---|
-| 0.672 s of digital silence | `Sous-titrage ST' 501` |
-| 0.672 s of noise at −50 dB | `– Sous-titrage FR 2021` |
-| 0.672 s of noise at −35 dB | `– Sous-titrage FR 2021` |
-| A short click, then silence | `Sous-titrage ST' 501` |
+The real path is a short sound that has the shape of speech: a cough, a throat clear, an isolated
+syllable, one word of a person in the room. Silero gives 1.00 to these. The audit cut such bursts
+from a real segment of the corpus.
 
-`main.rs:545` removes only an empty text. These four texts are not empty. Thus the service publishes
-them on `io.user.speak`. The cortex then starts a full interaction: the LLM answers, the TTS speaks,
-and the hippocampe writes the exchange to the history. A door or a key on a keyboard is sufficient.
+| Input | Silero maximum | Text that Whisper gives |
+|---|---|---|
+| 100 ms of speech | 1.00 | `Merci.` |
+| 160 ms of speech | 1.00 | `Merci d'avoir regardé cette vidéo !` |
+| 224 ms of speech | 1.00 | `Salut !` |
+| 320 ms of speech | 1.00 | `Salut !` |
+| 480 ms of speech | 1.00 | `Salut !` |
+
+`main.rs:545` removes only an empty text. These texts are not empty. Thus the service publishes them
+on `io.user.speak`. The cortex then starts a full interaction: the LLM answers, the TTS speaks, and
+the hippocampe writes the exchange to the history.
+
+A segment with no speech at all gives the same result when it reaches Whisper (section 3.3, the
+last row). But Silero does not send such a segment, thus this case stays theoretical.
 
 ### 3.5 A late VAD decision removes the first word
 
@@ -160,18 +170,27 @@ before the first speech frame (`segmenter.rs:33-41`), thus it cannot give this a
 
 ## 4. Findings
 
-### F1 — DEFECT — A VAD error makes an invented sentence, and the entity answers it
+### F1 — DEFECT — A short sound makes an invented sentence, and the entity answers it
+
+**Status: corrected. See P1.**
 
 **Evidence:** `segmenter.rs:33-41` starts a segment on one frame of 32 ms. `main.rs:545` removes only
-an empty text. Section 3.4 shows four invented texts.
+an empty text. Section 3.4 shows the invented texts.
 
-**When it breaks:** each time the VAD gives a probability above 0.5 on a noise. A door, a chair, a
-key, a cough. The entity then answers to nothing, speaks, and writes the exchange to the memory.
+**When it breaks:** each time a sound that has the shape of speech lasts less than a word. A cough,
+a throat clear, an "ah", one word of a different person in the room. Silero gives 1.00 to these
+sounds, thus the segment opens. The entity then answers to nothing, speaks, and writes the exchange
+to the memory.
+
+Silero refuses digital silence, white noise and a click (section 3.4). Thus the trigger is more
+narrow than the first version of this audit said, but it is not rare: a cough is sufficient.
 
 **Severity:** the highest. It is visible to the public in a live stream, and it makes the memory
 dirty.
 
 ### F2 — DEFECT — The segment has no maximum length
+
+**Status: corrected. See P2.**
 
 **Evidence:** `segmenter.rs:15-52` has no limit on `speech_buffer`. `ct2rs` `whisper.rs:101` makes
 one window for each 30 s. Section 3.2 gives the cost.
@@ -236,7 +255,7 @@ instances. They do not cover a maximum length or a minimum length, because the c
 
 ## 5. Proposals
 
-### P1 — for F1 — Ask for a minimum quantity of speech
+### P1 — for F1 — Ask for a minimum quantity of speech — **APPLIED 2026-09-07**
 
 **Change:** `VadSegmenter` counts the frames with a probability above the threshold. `SpeechEnded`
 comes only when this count is 8 or more, which is 256 ms of speech. Below this, the segmenter clears
@@ -248,8 +267,18 @@ the buffer and returns `Idle`.
 corpus: `seg_07.wav` is the word "Bon." and has 416 ms of speech, which is 13 frames, thus it
 stays. Start at 8 frames and lower the value if a real word disappears.
 
-**Proof:** `cargo test`, plus one run of `bench_stt` on the four files of section 3.4. The four
-invented texts must disappear.
+**Proof, measured after the change:**
+
+- `cargo test --release --features cuda`: 15 tests, 0 failures. Four of them are new and cover the
+  minimum, the limit value, and the state after a rejection.
+- The full pipeline (the real Silero model, then `VadSegmenter`) on the 20 segments of the corpus:
+  **20 segments sent, 0 rejected**. The change removes no real speech.
+- The same pipeline on the bursts of section 3.4: the bursts of 100, 160, 224 and 320 ms are
+  **rejected** (4 to 7 speech frames). The burst of 480 ms passes, which is correct: 480 ms of real
+  speech is a word.
+
+`bench_stt` cannot prove this change. It reads the WAV files and calls `whisper.generate` directly,
+thus it does not use the segmenter.
 
 **The other solution, and why the audit does not recommend it:** CTranslate2 gives
 `no_speech_prob`, and `WhisperOptions` has `return_no_speech_prob` (`ct2rs` `sys/whisper.rs:72`).
@@ -257,24 +286,58 @@ But `ct2rs::Whisper::generate` keeps only `res.sequences` and removes the rest
 (`ct2rs` `whisper.rs:157-167`). To read this probability, the service must leave the high-level API
 and make the mel spectrogram itself. This is a large change for the same result.
 
-### P2 — for F2 — Cut the segment at 25 s
+### P2 — for F2 — Cut the audio at 25 s, but publish only one text — **APPLIED 2026-09-07**
 
-**Change:** `VadSegmenter` holds a maximum of 400 000 samples, which is 25 s at 16 kHz. When the
-buffer is full, `push_frame` returns `SpeechEnded` with the buffer, keeps `is_speaking` at `true`
-and sets `silence_frames` to 0. The person continues to speak, and a new segment starts immediately.
+**The first version of this proposal was wrong.** It made the segmenter return `SpeechEnded` at the
+ceiling, thus the service published each part of 25 s on `io.user.speak`. The cortex then started an
+interaction on half a sentence, and the entity spoke while the person continued to speak. The
+correction separates two things that the old code held together: the end of an **audio chunk** and
+the end of a **turn of speech**.
 
-The limit is 25 s and not 30 s. The margin holds the silence tail and keeps one window in all cases.
+**Change:**
 
-**Files:** `src/segmenter.rs` (approximately 10 lines), plus 1 test, plus the README.
+1. `VadSegmenter` holds a maximum of 400 000 samples, which is 25 s at 16 kHz. Above this,
+   `push_frame` returns the new outcome `SpeechContinues(chunk)`, keeps `is_speaking` at `true`, and
+   keeps the remainder of the buffer for the next chunk.
+2. The cut prefers the most recent pause of the buffer (`last_pause_at`), if this pause is above
+   15 s. Thus no word is cut, and no audio is repeated. If the person made no pause, the cut is flat
+   and it carries 500 ms into the next chunk, thus the cut word is complete in that chunk.
+3. The channel to the STT thread carries a flag: is this chunk the last one of the turn?
+4. The STT thread transcribes each chunk immediately, and keeps the text in a map with the speaker
+   as the key. It publishes one message only, when the flag says the turn is complete. The text is
+   the parts joined with a space.
+5. `MIN_SPEECH_FRAMES` (P1) does not apply to the last chunk of a long turn. Two words after a
+   forced cut are a correct end, and to reject them would also lose the text of the full turn.
 
-**New risk:** the cut can arrive in the middle of a word. Mark it with a `ponytail:` comment. The
-upgrade path is a cut at the frame with the lowest energy in the last second. Do not build this
-until a real recording shows the problem.
+**Files:** `src/segmenter.rs` (approximately 45 lines with 6 tests), `src/main.rs` (approximately
+30 lines), `src/discord_audio.rs` (approximately 8 lines), plus the README.
 
-**Value:** the VRAM peak becomes 1602 MiB in all cases, and the latency stays below 272 ms
-(section 3.2). Both become predictable.
+**New risk:** on the flat cut, the joint repeats a fraction of a word ("la synthè synthèse vocale").
+The path is rare: it needs 15 s with no pause that Silero sees. A `ponytail:` comment marks it, with
+the upgrade path (align the end of chunk N on the start of chunk N+1).
 
-**Proof:** `cargo test`, plus `bench_stt --dir long/`. No file must go above one window.
+**Proof, measured on the monologue of 95 s (`STT_LANGUAGE=fr`, the real Silero model, the real
+segmenter, then Whisper for each chunk):**
+
+| | One call (before) | Chunks of 25 s (after) |
+|---|---|---|
+| Chunks | 1 of 95 s | 23.2 s, 24.6 s, 25.2 s, 22.8 s |
+| Windows of 30 s in one batch | 4 | 1 |
+| **Time after the person stops** | **658 ms** | **256 ms** |
+| **VRAM peak** | **2306 MiB** | **1602 MiB** |
+| Text | 2096 characters | 2151 characters |
+
+The first three chunks are transcribed while the person continues to speak. Only the last chunk
+(256 ms) is between the end of the speech and the message on `io.user.speak`.
+
+The text of the chunks is more complete, because the joints of the windows of 30 s lose words. The
+one-call version gives `…un nouveau segment demeure immédiatement derrière.  reste prévisible en
+toutes circonstances.`: one full clause is absent. The chunk version keeps it. The audit sees no
+repeated word in the chunk version, thus all the cuts landed in a pause.
+
+`cargo test --release --features cuda`: 21 tests, 0 failures. Six of them are new: the ceiling, the
+cut in the pause, the overlap of the flat cut, the maximum size of a chunk on 90 s of speech, the
+last chunk that P1 must not reject, and the return to the P1 rule after the turn.
 
 ### P3 — for F3 — Give `STT_LANGUAGE` a default value
 

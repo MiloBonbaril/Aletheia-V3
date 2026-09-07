@@ -195,7 +195,10 @@ async fn main() -> Result<()> {
 
     // 2. Setup Thread 2 -> Thread 3 Queue. The identity rides along so downstream
     // (cortex) can attribute the segment to a Discord speaker; local mic audio has none.
-    let (tx_speech, mut rx_speech) = mpsc::channel::<(Vec<f32>, Option<String>)>(32);
+    // Le booléen dit si ce morceau ferme le tour de parole. Un morceau non final vient d'une
+    // coupe forcée : on le transcrit tout de suite, mais on ne publie rien tant que la personne
+    // parle encore — sinon Aletheia répondrait à une demi-phrase et lui couperait la parole.
+    let (tx_speech, mut rx_speech) = mpsc::channel::<(Vec<f32>, Option<String>, bool)>(32);
 
     if !discord_mode {
     // 3. Setup Ringbuf for Thread 1 -> Thread 2
@@ -358,8 +361,20 @@ async fn main() -> Result<()> {
                             FrameOutcome::SpeechStarted => info!("Speech started (prob: {:.2})", prob),
                             FrameOutcome::SpeechEnded(segment) => {
                                 info!("Speech ended. Captured {} samples.", segment.len());
-                                tx_speech.blocking_send((segment, None)).unwrap();
+                                tx_speech.blocking_send((segment, None, true)).unwrap();
                             }
+                            FrameOutcome::SpeechContinues(chunk) => {
+                                info!(
+                                    "Speech still running: forced cut at {} samples ({} s).",
+                                    chunk.len(),
+                                    chunk.len() / 16_000
+                                );
+                                tx_speech.blocking_send((chunk, None, false)).unwrap();
+                            }
+                            FrameOutcome::SpeechDiscarded { speech_frames } => info!(
+                                "Speech discarded: only {} speech frame(s) (~{} ms), below the minimum.",
+                                speech_frames, speech_frames * 32
+                            ),
                             FrameOutcome::Speaking | FrameOutcome::Idle => {}
                         }
                     }
@@ -440,9 +455,16 @@ async fn main() -> Result<()> {
                 entry.0 = speaker_name;
                 let (name, pipeline) = entry;
 
-                for segment in pipeline.push_mono_48k(&mut session, &mono_48k) {
-                    info!("Speech ended for {}. Captured {} samples.", name, segment.len());
-                    if tx_speech_discord.blocking_send((segment, Some(name.clone()))).is_err() {
+                for (chunk, is_final) in pipeline.push_mono_48k(&mut session, &mono_48k) {
+                    if is_final {
+                        info!("Speech ended for {}. Captured {} samples.", name, chunk.len());
+                    } else {
+                        info!("Speech still running for {}. Forced cut at {} samples.", name, chunk.len());
+                    }
+                    if tx_speech_discord
+                        .blocking_send((chunk, Some(name.clone()), is_final))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -454,7 +476,10 @@ async fn main() -> Result<()> {
 
     if raw_mode {
         info!("Running in RAW AUDIO mode. Whisper model will NOT be loaded.");
-        while let Some((speech, speaker)) = rx_speech.recv().await {
+        // ponytail: le mode brut ignore le drapeau et publie chaque morceau. Le plafond de 25 s
+        // lui fait du bien : il borne le payload base64, qui dépassait le `max_payload` NATS sur
+        // les longs tours de parole. Un tour coupé donne plusieurs messages, pas un tronqué.
+        while let Some((speech, speaker, _is_final)) = rx_speech.recv().await {
             info!("Received speech chunk of len {} (raw mode)", speech.len());
             let start = std::time::Instant::now();
             let wav_data = create_wav_data(&speech);
@@ -534,24 +559,43 @@ async fn main() -> Result<()> {
         std::thread::spawn(move || {
             info!("STT ready (language: {}). Waiting for speech events...",
                 stt_language.as_deref().unwrap_or("auto-detect"));
-            while let Some((speech, speaker)) = rx_speech.blocking_recv() {
+            // Texte des morceaux déjà transcrits d'un tour de parole en cours, par locuteur
+            // (clé `None` pour le micro local). On recolle et on publie une seule fois, quand
+            // la personne se tait vraiment.
+            // ponytail: pas de plafond sur le texte retenu. Un tour d'une heure fait ~60 Ko,
+            // loin du `max_payload` NATS de 1 Mo. Le borner si un jour un flux ne se tait plus.
+            let mut pending: std::collections::HashMap<Option<String>, Vec<String>> =
+                std::collections::HashMap::new();
+
+            while let Some((speech, speaker, is_final)) = rx_speech.blocking_recv() {
                 info!("Received speech chunk of len {}", speech.len());
                 let start = std::time::Instant::now();
                 let lang = stt_language.as_deref();
                 match whisper.generate(&speech, lang, false, &whisper_options) {
                     Ok(result) => {
-                        let text = result.join(" ");
+                        let text = result.join(" ").trim().to_string();
                         info!("Transcribed in {:?}: {}", start.elapsed(), text);
-                        if text.trim().is_empty() {
-                            continue;
-                        }
-                        if tx_text.blocking_send((text, speaker)).is_err() {
-                            return;
+                        if !text.is_empty() {
+                            pending.entry(speaker.clone()).or_default().push(text);
                         }
                     }
                     Err(e) => {
                         error!("Whisper transcription failed: {}. Try setting STT_LANGUAGE=fr (or en, etc.)", e);
                     }
+                }
+
+                // Coupe forcée : on garde le texte et on laisse la personne finir. La sortie du
+                // `match` ci-dessus est volontairement hors du `continue` — un morceau qui échoue
+                // ne doit pas emporter le texte déjà accumulé pour ce tour.
+                if !is_final {
+                    continue;
+                }
+                let full = pending.remove(&speaker).unwrap_or_default().join(" ");
+                if full.is_empty() {
+                    continue;
+                }
+                if tx_text.blocking_send((full, speaker)).is_err() {
+                    return;
                 }
             }
         });

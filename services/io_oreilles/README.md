@@ -7,9 +7,12 @@ written in **Rust**.
 
 - **Audio capture:** it listens continuously to the physical microphone.
 - **Voice activity detection (VAD):** it uses **Silero VAD** to find the speech segments and to
-  ignore the background noise.
+  ignore the background noise. It refuses a segment that holds less than 256 ms of speech (see
+  below).
 - **Transcription (STT):** it changes the speech into text with **CTranslate2** and the **Whisper**
   model.
+- **Long turns:** it cuts the audio at 25 s and transcribes each part immediately, but it publishes
+  one text only, at the end of the turn (see below).
 - **Event output:** it publishes the text on `io.user.speak` at the end of each complete sentence.
 - **Discord mode:** with the `--discord` flag, it processes the audio of a Discord voice channel. It
   runs an independent VAD pipeline for each speaker. Thus a person who stops to speak does not cut
@@ -88,6 +91,59 @@ The command builds CTranslate2 with CUDA. It takes approximately 3 minutes. Two 
 
 Without the `cuda` feature, the binary stays on the CPU with OpenBLAS. The build selects the device
 (`stt_device()`). You cannot change it during operation.
+
+### Minimum speech duration
+
+A segment that holds less than **256 ms of speech** does not go to Whisper. The service writes
+`Speech discarded` in the log and continues.
+
+Whisper always gives a text. For a sound that is too short, this text is an invention: `Merci.`,
+`Salut !` or `Merci d'avoir regardé cette vidéo !`. The service published these texts on
+`io.user.speak`, because the only filter was an empty text. The entity then answered to a cough.
+
+The limit is 8 VAD frames of 512 samples. The service counts only the frames above the speech
+threshold, not the length of the segment. Thus a pause in the middle of a word does not change the
+decision. The shortest real word of the bench corpus ("Bon.") holds 13 frames, thus it stays.
+
+To change the limit, change `MIN_SPEECH_FRAMES` in `src/segmenter.rs`. Read the `Speech discarded`
+lines of the log first: they give the frame count of each rejected segment.
+
+See `docs/audits/io_oreilles-2026-09-07.md`, finding F1.
+
+### Long turns of speech
+
+Whisper reads windows of 30 s. A segment of 95 s becomes 4 windows in one batch: 604 ms and
+2306 MiB, and the model loses words at each joint of the windows.
+
+The service thus cuts the audio at **25 s** and gives each part to Whisper immediately. It does not
+publish these parts. It keeps the text, and it publishes one message on `io.user.speak` when the
+person stops to speak. The parts are joined with a space.
+
+Two reasons for this:
+
+- The entity must not answer half a sentence. To publish a part of 25 s makes Aletheia speak while
+  the person continues, and she does not have the full statement.
+- The transcription of the first parts happens during the speech. Thus only the last part is between
+  the end of the speech and the message.
+
+Measured on a monologue of 95 s, with `STT_LANGUAGE=fr`:
+
+| | One segment (before) | Parts of 25 s (after) |
+|---|---|---|
+| Windows of 30 s in one batch | 4 | 1 |
+| Time after the person stops | 658 ms | **256 ms** |
+| VRAM peak | 2306 MiB | **1602 MiB** |
+| Text | 2096 characters | 2151 characters |
+
+The cut goes to the most recent pause of the buffer, if this pause is above 15 s. Thus the part ends
+on a silence and no word is cut. If the person made no pause, the cut is flat and the service keeps
+500 ms for the next part, thus the cut word is complete in that part. The joint can then repeat a
+fraction of a word.
+
+The limits are `MAX_CHUNK_SAMPLES`, `MIN_CHUNK_SAMPLES` and `HARD_CUT_OVERLAP_SAMPLES` in
+`src/segmenter.rs`.
+
+See `docs/audits/io_oreilles-2026-09-07.md`, finding F2.
 
 ### Compute type
 

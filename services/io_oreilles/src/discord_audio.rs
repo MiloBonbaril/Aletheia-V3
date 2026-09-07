@@ -64,9 +64,14 @@ impl SpeakerPipeline {
         }
     }
 
-    /// Feed a chunk of mono 48kHz samples; returns any speech segments (16kHz f32)
-    /// that ended as a result (normally 0 or 1 per call).
-    pub fn push_mono_48k(&mut self, session: &mut Session, samples: &[f32]) -> Vec<Vec<f32>> {
+    /// Feed a chunk of mono 48kHz samples; returns any audio chunks (16kHz f32) that came
+    /// out as a result (normally 0 or 1 per call). The flag is `true` when the speaker has
+    /// stopped, `false` for a forced cut in the middle of a long turn.
+    pub fn push_mono_48k(
+        &mut self,
+        session: &mut Session,
+        samples: &[f32],
+    ) -> Vec<(Vec<f32>, bool)> {
         self.internal_buf.extend_from_slice(samples);
         let mut ended = Vec::new();
 
@@ -83,13 +88,16 @@ impl SpeakerPipeline {
         while self.vad_buf.len() >= 512 {
             let frame: Vec<f32> = self.vad_buf.drain(0..512).collect();
             match session.infer_chunk(&mut self.stream_state, &frame) {
-                Ok(prob) => {
-                    if let FrameOutcome::SpeechEnded(segment) =
-                        self.segmenter.push_frame(&frame, prob)
-                    {
-                        ended.push(segment);
-                    }
-                }
+                Ok(prob) => match self.segmenter.push_frame(&frame, prob) {
+                    FrameOutcome::SpeechEnded(segment) => ended.push((segment, true)),
+                    FrameOutcome::SpeechContinues(chunk) => ended.push((chunk, false)),
+                    FrameOutcome::SpeechDiscarded { speech_frames } => tracing::info!(
+                        "Speech discarded: only {} speech frame(s) (~{} ms), below the minimum.",
+                        speech_frames,
+                        speech_frames * 32
+                    ),
+                    _ => {}
+                },
                 Err(e) => tracing::error!("Discord-speaker VAD error: {:?}", e),
             }
         }
