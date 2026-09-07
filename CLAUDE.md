@@ -63,10 +63,16 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `io.user.speak`. With `--discord`, it processes the per-speaker PCM audio from `io_discord`
   instead of the local microphone. The GPU build (`--features cuda`) is necessary for real-time
   speech.
-- **io_voix** (Python) — TTS with Kokoro ONNX on the GPU (`CUDAExecutionProvider`), with a fallback
-  to the CPU. It consumes `lobe.fragment_stream`. It publishes the
-  audio on `io.voice.speak.audio`, and the time references on `io.voice.speak.start` and `.end`. It
-  downloads the model weights (approximately 350 MB) into `models/` at the first start.
+- **io_voix** (Python) — TTS with Audio8 TTS Preview 0.6B on the GPU (torch, INT8 weight-only). It
+  consumes `lobe.fragment_stream`. It publishes the audio on `io.voice.speak.audio`, and the time
+  references on `io.voice.speak.start` and `.end`. It downloads the model (approximately 1.3 GB)
+  into `models/audio8-tts-0.6b/` at the first start. The model is autoregressive, thus `engine.py`
+  gives the audio of one fragment in chunks that become longer, to keep the time to first audio low
+  (120 ms end to end, real-time factor 0.32). The GPU is necessary, and the CUDA graphs of
+  `engine.py` are necessary too: without them the real-time factor is 2.2 and the service holds no
+  target. The service handles one fragment at a time, because the KV caches and the captured graphs
+  are shared. The output is 44.1 kHz. The voice comes from a reference recording (`A8_VOICE_WAV`,
+  `A8_VOICE_TEXT`), because Audio8 has no voice presets.
 - **io_discord** (Python) — the Discord gateway (`bot.py`, cogs in `cogs/`). It bridges Discord and
   `io.user.msg.text` / `lobe.fragment_stream`. It also streams the voice audio in the two
   directions, publishes the voice presence, and holds an independent bets function.
@@ -148,8 +154,8 @@ the address `nats://localhost:4222` in their source code.
   `PROACTIVE_GATE_START_HOUR`, `PROACTIVE_GATE_END_HOUR`
 - io_discord: `DISCORD_TOKEN`, `DISCORD_USER_ID`, `DISCORD_GUILD_ID`, `TEXT_CHANNEL_ID`,
   `COMMAND_PREFIX`
-- io_voix: `KOKORO_VOICE`, `KOKORO_SPEED`, `KOKORO_MODELS_DIR`, `MUTE_LOCAL_PLAYBACK`,
-  `KOKORO_CPU_THREADS`
+- io_voix: `A8_QUANT`, `A8_VOICE_WAV`, `A8_VOICE_TEXT`, `A8_CHUNK_SCHEDULE`, `A8_MODEL_DIR`,
+  `MUTE_LOCAL_PLAYBACK`
 - io_oreilles: `STT_LANGUAGE`, `STT_MODEL_PATH`, `RAW_AUDIO`, `ORT_DYLIB_PATH`
 
 ## Work between services

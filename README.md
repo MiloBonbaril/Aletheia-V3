@@ -98,7 +98,7 @@ flowchart TB
 
     subgraph Motor_Egress ["📤 MOTOR EGRESS (Outputs)"]
         direction LR
-        voix["🔊 io_voix (Voice / TTS)<br/><i>Python / Kokoro ONNX</i>"]:::egress
+        voix["🔊 io_voix (Voice / TTS)<br/><i>Python / Audio8 TTS</i>"]:::egress
         visage["👤 io_visage (Expression - Planned)"]:::egress
     end
 

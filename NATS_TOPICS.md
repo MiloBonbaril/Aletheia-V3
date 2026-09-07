@@ -356,6 +356,11 @@ The synthesized audio of one fragment. `io_voix` publishes it between `io.voice.
 `io.voice.speak.end`. The local playback on the sound card continues in parallel, if
 `MUTE_LOCAL_PLAYBACK` is not set.
 
+`io_voix` synthesizes each fragment in chunks and plays them as they become available, but it
+publishes **one message for each fragment**, not one for each chunk. Thus this topic keeps its
+meaning. The audio is 44.1 kHz since the change to the Audio8 engine. Consumers read the rate in the
+WAV header. They must not assume a rate.
+
 There is no message for a fragment that has no text, for example the silent fragment at the end of a
 stream.
 
@@ -366,7 +371,7 @@ that the bot joined. If the bot is in no channel, it ignores the message.
   ```json
   {
     "sequence": 1,
-    "audio": "base64... (WAV, mono, 22050 Hz)",
+    "audio": "base64... (WAV, mono, 44100 Hz)",
     "format": "wav",
     "is_last": false
   }

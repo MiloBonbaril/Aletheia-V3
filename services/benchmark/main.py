@@ -225,7 +225,7 @@ def render_transaction_report(tx, graph):
             elif step_id == "lobe_first_fragment":
                 details = f"💬 TTFT: '{payload.get('text', '')}'"
             elif step_id == "voice_playback_start":
-                details = f"🔊 Kokoro synthétise et commence à jouer"
+                details = f"🔊 Audio8 synthétise et commence à jouer"
             elif step_id == "lobe_last_fragment":
                 details = f"✅ LLM fin. Sequence: #{payload.get('sequence', 0)}"
             elif step_id == "voice_playback_end":

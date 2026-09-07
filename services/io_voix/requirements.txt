@@ -1,12 +1,22 @@
 nats-py
-asyncio
-kokoro-onnx
-# kokoro-onnx dépend de `onnxruntime` (CPU). Pour la synthèse sur GPU, remplacez-le
-# APRÈS cette installation — les deux paquets partagent le même module `onnxruntime` :
-#   pip uninstall -y onnxruntime && pip install onnxruntime-gpu
-# Sans ce remplacement, main.py démarre sur CPU (repli automatique).
 sounddevice
 soundfile
 numpy
-requests
 pytest
+
+# Moteur TTS Audio8 (DualAR, 44,1 kHz, Apache-2.0).
+# Installez d'abord torch avec la roue CUDA de votre plateforme, sinon pip prend la
+# version CPU et la synthèse ne tient pas le temps réel :
+#   pip install torch --index-url https://download.pytorch.org/whl/cu130
+torch>=2.5.0
+transformers>=4.57.0,<5
+safetensors>=0.4
+huggingface-hub
+
+# INT8 weight-only. torch.compile est obligatoire pour que la quantization ne soit pas
+# une perte nette : en eager elle coûte 30 % de latence en plus (voir README).
+torchao>=0.9
+
+# Nécessaire uniquement si le wav de A8_VOICE_WAV n'est pas déjà en 44,1 kHz : le
+# processeur d'Audio8 s'en sert pour rééchantillonner la référence.
+torchaudio
