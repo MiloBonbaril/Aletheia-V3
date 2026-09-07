@@ -58,7 +58,7 @@ for the measurements, and then removed it. `git status` shows this report as the
 | Latency | **DEFECT** | `STT_LANGUAGE` has no value, thus Whisper detects the language for each segment. Measured cost: 165.2 ms against 92.4 ms, which is 73 ms and 44 % of the time. See F3. |
 | VRAM | **RISK** | The floor is 1602 MiB. A long segment adds up to 704 MiB, with no limit. The memory returns to 1602 MiB after the segment. See F2 and section 5. |
 | Contract | **OK** | `main.rs:560-565` publishes `{text, speaker?}`. `NATS_TOPICS.md:38-50` gives the same payload. `services/cortex/src/main.rs:376-390` reads the same two fields. The cortex makes the `correlation_id`, because `io_oreilles` is an ingress. |
-| Failure | **RISK** | `main.rs:361` uses `unwrap()`. `main.rs:432` uses `expect()` in a thread. A panic in these threads stops the hearing and does not stop the process. See F5. |
+| Failure | **DEFECT** | `main.rs` used `unwrap()` and `expect()` in threads: a panic stopped the hearing and not the process. Worse, a wrong `ORT_DYLIB_PATH` blocked the service for ever with no message (measured). See F5. |
 | Concurrency | **RISK** | One thread does the transcription (`main.rs:534`). This is a decision. But a segment with no length limit makes the wait for the other speakers long. See F6. |
 | Config | **DEFECT** | No Rust service uses a `.env` file. No `Cargo.toml` contains `dotenv`. Thus `STT_LANGUAGE` comes only from the shell, and it usually has no value. See F3 and F7. |
 | Tests | **RISK** | The 12 tests pass. They cover the transitions of the segmenter, the mode selection, the event and the downmix. They do not cover a length limit, because no limit exists. See F8. |
@@ -160,9 +160,25 @@ the hippocampe writes the exchange to the history.
 A segment with no speech at all gives the same result when it reaches Whisper (section 3.3, the
 last row). But Silero does not send such a segment, thus this case stays theoretical.
 
-### 3.5 A late VAD decision removes the first word
+### 3.5 The VAD opens the segment after the start of the word
 
-The same sentence, with the start cut, to make a late VAD decision.
+The segmenter used to start the segment at the first frame above the threshold. It kept no audio
+before it. The audit measured how late that frame is, against the acoustic start of the word.
+
+On the corpus with no added noise, Silero is fast: 0 frames in the median, 3 frames (96 ms) in the
+worst case. But these files start on the word. A real microphone gives room tone first, and a word
+that starts with a consonant comes up over some tens of milliseconds. With 1 s of room tone and an
+attack of 150 ms, the delay grows:
+
+| Room tone | Median | p90 | Max |
+|---|---|---|---|
+| −48 dB | 2 frames | 4 frames | 4 frames (128 ms) |
+| −36 dB | 1 frame | 4 frames | 4 frames (128 ms) |
+| −30 dB | 2 frames | 4 frames | 5 frames (160 ms) |
+| −24 dB | 2 frames | 4 frames | 5 frames (160 ms) |
+
+The audio in this interval is lost. What it costs is visible when it is removed from a correct
+segment:
 
 | Cut at the start | Text that Whisper gives |
 |---|---|
@@ -171,8 +187,7 @@ The same sentence, with the start cut, to make a late VAD decision.
 | 200 ms | `et lance le NBenchMockF. La mediane est à 165 millisecondes.` |
 | 300 ms | `Lance le NBenchMockF, la mediane est à 165 millisecondes.` |
 
-The rest of the sentence stays correct. Only the start is damaged. The segmenter keeps no audio
-before the first speech frame (`segmenter.rs:33-41`), thus it cannot give this audio to the model.
+The rest of the sentence stays correct. Only the start is damaged.
 
 ## 4. Findings
 
@@ -224,19 +239,33 @@ service reads a `.env` file: no `Cargo.toml` in `services/` contains `dotenv`. S
 
 ### F4 — RISK — There is no audio before the first speech frame
 
-**Evidence:** `segmenter.rs:33-41`. Section 3.5 shows the damage.
+**Status: corrected. See P4.**
+
+**Evidence:** `segmenter.rs:33-41`. Section 3.5 measures a delay of up to 5 frames (160 ms) with
+room tone, and shows the damage that this quantity of missing audio makes.
 
 **When it breaks:** the VAD needs a small time to pass 0.5. A word that starts with a weak sound (a
 vowel, an "f", an "s") loses its start. The user hears a wrong first word.
 
-### F5 — RISK — A panic in a thread makes the service deaf with no message
+### F5 — DEFECT — A panic in a thread makes the service deaf with no message
 
-**Evidence:** `main.rs:361` uses `unwrap()` on `blocking_send`. `main.rs:432` uses `expect()` on the
-load of the Silero model, inside a thread.
+**Status: corrected. See P5.** The audit raised this finding from RISK to DEFECT: the test of the
+correction found a case where the service blocks for ever, which is worse than a dead thread.
+
+**Evidence:** `main.rs` used `unwrap()` on `blocking_send` in the microphone VAD thread, and
+`expect()` on the load of the Silero model inside the Discord thread. `discord_audio.rs` used
+`expect()` on the construction of the resampler of each speaker.
 
 **When it breaks:** the STT thread stops, thus the channel closes, thus the VAD thread panics on the
 `unwrap()`. The process continues. NATS stays connected. The service looks correct and hears
 nothing. Nothing publishes an error on the bus.
+
+**And a worse case, found during the test of P5:** with a wrong `ORT_DYLIB_PATH`, the service does
+not stop and does not give an error. It **blocks for ever**. The `ort` crate loads the library on
+the first use, and a wrong path makes its single initialization fail with no way back. Measured:
+after 25 s, all the threads are in `futex_do_wait`, the last line of the log is
+`Initializing Silero VAD Model...`, and the process holds its connection to NATS. A supervisor sees
+a healthy process. This is the exact fault this finding is about, in its worst form.
 
 ### F6 — RISK — One long segment stops all the other speakers
 
@@ -385,31 +414,87 @@ the environment, and `langue=auto` with `STT_LANGUAGE=auto`: the two paths work.
 `CLAUDE.md:146`, but it adds a dependency to three Rust services for one variable. The audit
 recommends the default value, and a correction of `CLAUDE.md` (see P7).
 
-### P4 — for F4 — Keep 200 ms of audio before the speech
+### P4 — for F4 — Keep 224 ms of audio before the speech — **APPLIED 2026-09-07**
 
-**Change:** `VadSegmenter` holds the last 7 frames in a ring, also when it is idle. On
-`SpeechStarted`, it puts this ring in front of the buffer.
+**Change:** `VadSegmenter` holds the last 7 frames of idle audio in a ring. On the first speech
+frame, it puts this ring in front of the buffer. The ring is empty at the end of each turn, thus the
+audio of one turn never goes into the next one.
 
-**Files:** `src/segmenter.rs` (approximately 10 lines), plus 1 test.
+The pre-roll is not speech: it does not count in `speech_frames`, thus it cannot make a cough pass
+the `MIN_SPEECH_FRAMES` rule of P1.
 
-**New risk:** none for the latency. The segment grows by 224 ms, and section 3.3 shows that a longer
-segment costs almost nothing.
+**Files:** `src/segmenter.rs` (approximately 15 lines with 3 tests).
 
-**Proof:** `cargo test` for the length of the buffer, plus a listen test on a real recording. A WER
-measurement is better, see the open questions.
+**Why 7 frames:** section 3.5 measures a delay of 5 frames (160 ms) in the worst case, with room
+tone at −24 dB. 7 frames is 224 ms, which is 1.4 times this worst case. The margin costs
+approximately 2 ms, because Whisper fills each segment to 30 s in all cases (section 3.3).
 
-### P5 — for F5 — Stop the process, or say the error on the bus
+**New risk:** none for the latency. With a loud loudspeaker in the room, the pre-roll can hold the
+end of the answer of the entity. This is an echo problem, and the pre-roll does not make it.
 
-**Change:** replace `unwrap()` at `main.rs:361` by a `break` with an `error!`. Move the load of the
-Silero model at `main.rs:432` before the thread starts, and use `?`.
+**Proof, measured on the 20 segments of the corpus with room tone at −36 dB, the real Silero model
+and the real segmenter, then Whisper on the segment with and without its pre-roll:**
 
-**Files:** `src/main.rs` (approximately 6 lines).
+- **4 segments of 20** give a different start. **2 of them are corrected**, **0 are damaged**:
+
+  | Segment | Without the pre-roll | With the pre-roll |
+  |---|---|---|
+  | 15 | `On vient de` | `Combien de mémoire` (correct) |
+  | 16 | `Comment dire, c'est` | `Euh, comment dire,` (correct) |
+  | 14 | `Le busnat ne` | `Le bus NAC` (both are wrong) |
+  | 0 | `Salut Eneles et` | `Salut Pénalès et` (both are wrong) |
+
+- The 16 other segments do not change.
+
+**Be honest about the size of the gain:** on the corpus with no added noise, the pre-roll changes
+nothing, because Silero fires at the same frame as the word. The gain appears with room tone, which
+is the real condition. `cargo test --release --features cuda`: 24 tests, 0 failures.
+
+### P5 — for F5 — Stop the process with an explicit cause — **APPLIED 2026-09-07**
+
+**Change, in three parts:**
+
+1. **What can fail at start-up now fails at start-up, with `?`.** The resampler of the microphone
+   and the Silero model of the Discord mode are built before their thread, thus their cause goes to
+   `main` and the process stops with the message of `anyhow`.
+2. **What can fail in a thread calls `fatal()`.** A background thread cannot return an error, thus
+   this function writes two lines and stops the process with the code 1: the cause, and the reason
+   why the service cannot continue. Nine sites use it: the two sends of the microphone VAD thread,
+   the subscription to `io.discord.voice.frame`, the send to the Discord VAD thread, the
+   construction of the pipeline of a speaker, the send of the Discord VAD thread, the send of the
+   STT thread, and the two resampler outputs. After this change, no thread of this service can die
+   in silence.
+3. **`ORT_DYLIB_PATH` is verified before the first Silero session.** This is the new part, and it
+   comes from the test. `ort` gives no error on a wrong path: it blocks. The service now stops with
+   the path that is wrong and what to do.
+
+`SpeakerPipeline::new()` gives a `Result` for this, and the last two `unwrap()` of the audio path
+(`out.pop()` on the resampler output) give `fatal()` too. They are true invariants — the number of
+channels is fixed at the construction — but an invariant that breaks inside a thread is exactly the
+fault of this finding.
+
+The two main loops no longer end with `Ok(())`. They end with an error: to leave these loops means
+that nothing can publish any more.
+
+**Files:** `src/main.rs` (approximately 60 lines), `src/discord_audio.rs` (approximately 12 lines).
 
 **New risk:** the service stops instead of continuing without hearing. This is the correct
-behaviour: a supervisor restarts it, and the operator sees the error.
+behaviour: a supervisor restarts it, and the operator sees the cause. `fatal()` uses
+`std::process::exit`, thus it runs no destructor. There is nothing to write and nothing to drain
+here, and `tracing` writes on stderr with no buffer, thus the message goes out. A `ponytail:`
+comment marks this limit and gives the upgrade path (a stop channel).
 
-**Proof:** a manual step. Start the service with a wrong `ORT_DYLIB_PATH` in the Discord mode. The
-process must stop with a message.
+**Proof, measured with the service started for real (NATS up, then stopped again):**
+
+| Fault | Before | After |
+|---|---|---|
+| NATS absent | code 1, `Failed to connect to NATS` | no change, already correct |
+| `STT_MODEL_PATH` wrong | code 1, `Failed to load Whisper model from …` | no change, already correct |
+| `ORT_DYLIB_PATH` wrong | **blocks for ever, no message** | **code 1**, `ORT_DYLIB_PATH points at '…', which is not a readable file.` |
+| `ORT_DYLIB_PATH` wrong, `--discord` | **blocks for ever, no message** | **code 1**, the same message |
+
+The correct path does not change: the service starts, and gives
+`STT ready (language: fr). Waiting for speech events...`.
 
 ### P6 — for F6 — Keep one thread. Write an ADR.
 
@@ -458,6 +543,6 @@ minimum, and the only true gain is to stop a long segment from making more than 
 |---|---|---|
 | How many times each hour does the VAD make a false decision in the real room of the user? | UNKNOWN | Start the service with `RAW_AUDIO=1` for one hour in a quiet room. Count the messages on `io.user.speak.raw`. Each message is a false decision. |
 | Is 8 frames (256 ms) the correct minimum for P1? | UNKNOWN | Record 30 short real answers ("oui", "non", "ok", "hmm"). Measure the number of speech frames of each one. Take the minimum, and remove 2 frames. |
-| Does the pre-roll of P4 lower the word error rate? | UNKNOWN | Make a corpus of 50 real segments with the transcription by hand. Measure the WER before and after. `bench_stt` measures the latency only; it does not measure the WER. |
+| Does the pre-roll of P4 lower the word error rate? | Partly answered | On 20 synthetic segments with room tone, it corrects the start of 2 and damages 0 (P4). A true WER needs a corpus of 50 real segments with the transcription by hand. `bench_stt` measures the latency only. |
 | What is the true VRAM budget of the three services together? | UNKNOWN | Start `lobe_frontal`, `io_voix` and `io_oreilles`, and read `nvidia-smi --query-compute-apps` while the three work. This audit measures `io_oreilles` alone. |
 | Does the end-to-end latency change with P2 and P3? | UNKNOWN | `io.user.speak` is an ingress point of `services/benchmark/graphs/E2E.json`. Thus the benchmark does not see the STT. Add a step before this topic in the graph, or accept `bench_stt` as the only measurement of this service. |

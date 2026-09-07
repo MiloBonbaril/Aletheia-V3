@@ -13,6 +13,8 @@ written in **Rust**.
   model.
 - **Long turns:** it cuts the audio at 25 s and transcribes each part immediately, but it publishes
   one text only, at the end of the turn (see below).
+- **Attack of the first word:** the segment starts 224 ms before the decision of the VAD, so the
+  start of the first word is not lost.
 - **Event output:** it publishes the text on `io.user.speak` at the end of each complete sentence.
 - **Discord mode:** with the `--discord` flag, it processes the audio of a Discord voice channel. It
   runs an independent VAD pipeline for each speaker. Thus a person who stops to speak does not cut
@@ -69,6 +71,31 @@ cargo run --release -- --discord    # no local microphone; per-speaker PCM from 
 
 The `--discord` flag stops the local microphone capture for that run. The service subscribes to
 `io.discord.voice.frame`.
+
+### Behaviour on a fault
+
+The service stops with the code 1 and an explicit cause when it cannot hear. It does not continue in
+silence. A background thread that cannot do its work writes two lines and stops the process:
+
+```
+FATAL — le fil STT ne reçoit plus les segments : channel closed
+io_oreilles s'arrête : sans ce composant le service n'entend plus rien.
+```
+
+| Fault | Result |
+|---|---|
+| NATS is absent | code 1, `Failed to connect to NATS` |
+| `STT_MODEL_PATH` is wrong | code 1, `Failed to load Whisper model from …` |
+| `ORT_DYLIB_PATH` is wrong | code 1, `ORT_DYLIB_PATH points at '…', which is not a readable file.` |
+| A VAD, STT or Discord thread stops | code 1, `FATAL — …` with the cause |
+
+The service verifies `ORT_DYLIB_PATH` itself, before the first use. The `ort` crate gives no error
+on a wrong path: it blocks for ever, and the service stays alive, connected to NATS, and deaf.
+
+Give the service to a supervisor that restarts it (systemd, Docker with `restart: unless-stopped`).
+A stop is a fault to read in the log, not a state to accept.
+
+See `docs/audits/io_oreilles-2026-09-07.md`, finding F5.
 
 ### GPU (CUDA)
 
@@ -144,6 +171,26 @@ The limits are `MAX_CHUNK_SAMPLES`, `MIN_CHUNK_SAMPLES` and `HARD_CUT_OVERLAP_SA
 `src/segmenter.rs`.
 
 See `docs/audits/io_oreilles-2026-09-07.md`, finding F2.
+
+### Audio before the first word
+
+The segment starts **224 ms before** the first frame that the VAD calls speech.
+
+Silero needs a moment to pass its threshold. With room tone and a word that starts with a consonant,
+it fires 1 to 5 frames after the true start of the word (median 2, worst case 160 ms at −24 dB).
+This audio holds the attack of the first word, and Whisper needs it: with 200 ms removed,
+`J'ai lancé le benchmark` becomes `et lance le…`.
+
+Measured on 20 segments with room tone at −36 dB, with and without this audio: 4 segments give a
+different start, 2 of them become correct, and 0 become worse. On clean audio with no room tone, it
+changes nothing, because Silero fires on the same frame as the word.
+
+The service keeps these frames also when it hears nothing. They are not speech, thus they do not
+count in the minimum speech duration above: a cough stays rejected.
+
+The limit is `PREROLL_FRAMES` in `src/segmenter.rs`.
+
+See `docs/audits/io_oreilles-2026-09-07.md`, finding F4.
 
 ### Compute type
 

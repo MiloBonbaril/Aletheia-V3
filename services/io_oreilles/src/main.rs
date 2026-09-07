@@ -44,6 +44,23 @@ fn stt_device() -> ct2rs::Device {
     }
 }
 
+/// Arrête le processus sur une panne qui rend l'écoute impossible.
+///
+/// Les fils de fond (VAD, STT, pont Discord) ne peuvent pas remonter d'erreur : un `unwrap`
+/// ou un `expect` y tuait le fil et laissait le processus vivant, connecté à NATS, et sourd.
+/// Rien sur le bus, rien dans les logs après coup : le service avait l'air en bonne santé.
+/// On préfère mourir avec une cause lisible — un superviseur redémarre, l'opérateur sait quoi
+/// réparer.
+///
+/// ponytail: `process::exit`, pas de canal d'arrêt. Pas de destructeur à faire tourner ici
+/// (NATS est en fire-and-forget, rien n'est en attente d'écriture) et `tracing` écrit sur
+/// stderr sans tampon, donc le message sort. Passer à un canal si un jour il faut vidanger.
+fn fatal(what: &str, err: impl std::fmt::Display) -> ! {
+    error!("FATAL — {what} : {err}");
+    error!("io_oreilles s'arrête : sans ce composant le service n'entend plus rien.");
+    std::process::exit(1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,8 +197,23 @@ async fn main() -> Result<()> {
             // SAFETY: called before any threads are spawned
             unsafe { std::env::set_var("ORT_DYLIB_PATH", &path) };
         } else {
-            tracing::warn!("ORT_DYLIB_PATH not set and libonnxruntime.so not found. Install onnxruntime via pip or set ORT_DYLIB_PATH manually.");
+            tracing::warn!("ORT_DYLIB_PATH not set and libonnxruntime.so not found. Install onnxruntime via pip or set ORT_DYLIB_PATH manually. The service will block on the first Silero session if the loader does not find the library on its own.");
         }
+    }
+
+    // `ort` charge la bibliothèque paresseusement et ne remonte pas un chemin invalide : la
+    // première session part en panique dans son initialisation unique, plus rien ne la reprend,
+    // et tous les fils finissent en `futex_do_wait`. Mesuré : le service reste vivant, connecté
+    // à NATS, silencieux, indéfiniment — exactement la panne muette qu'on cherche à supprimer.
+    // Le chemin est une précondition qui nous appartient : on la vérifie avant la session.
+    if let Ok(path) = std::env::var("ORT_DYLIB_PATH") {
+        anyhow::ensure!(
+            std::path::Path::new(&path).is_file(),
+            "ORT_DYLIB_PATH points at `{path}`, which is not a readable file.\n\
+             Give the path of libonnxruntime.so, or remove the variable so the service finds it \
+             on its own (see README). Without this check the service blocks for ever with no \
+             message."
+        );
     }
 
     // 1. Setup NATS connection
@@ -263,29 +295,30 @@ async fn main() -> Result<()> {
     let mut stream_state = StreamState::new(SileroSampleRate::Rate16k);
     info!("Silero VAD Model loaded.");
 
+    // Le rééchantillonneur se construit ici, pas dans le fil : une erreur de construction est
+    // une panne de démarrage, elle doit sortir par `?` avec sa cause, pas tuer un fil en silence.
+    let target_sr = 16_000;
+    let mut resampler = if sample_rate != target_sr {
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        Some(
+            SincFixedIn::<f32>::new(target_sr as f64 / sample_rate as f64, 2.0, params, 1024, 1)
+                .with_context(|| {
+                    format!("Failed to init the resampler for {sample_rate} Hz -> {target_sr} Hz")
+                })?,
+        )
+    } else {
+        None
+    };
+
     // 5. Setup Thread 2 (VAD Watcher)
     std::thread::spawn(move || {
         info!("Started VAD Thread (Thread 2)");
-
-        let target_sr = 16_000;
-        let mut resampler = if sample_rate != target_sr {
-            let params = SincInterpolationParameters {
-                sinc_len: 256,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: 256,
-                window: WindowFunction::BlackmanHarris2,
-            };
-            Some(SincFixedIn::<f32>::new(
-                target_sr as f64 / sample_rate as f64,
-                2.0,
-                params,
-                1024,
-                1
-            ).expect("Failed to init resampler"))
-        } else {
-            None
-        };
 
         let mut segmenter = VadSegmenter::new();
         let mut internal_buf = Vec::new();
@@ -334,7 +367,12 @@ async fn main() -> Result<()> {
                     let to_process = internal_buf.drain(0..required_in).collect::<Vec<_>>();
                     let waves_in = vec![to_process];
                     match r.process(&waves_in, None) {
-                        Ok(mut out) => out_16k.extend(out.pop().unwrap()),
+                        // Un canal exactement, fixé à la construction. Si rubato en rend zéro,
+                        // son contrat est cassé : mieux vaut le dire que sourdre en silence.
+                        Ok(mut out) => match out.pop() {
+                            Some(channel) => out_16k.extend(channel),
+                            None => fatal("rééchantillonnage du micro", "aucun canal en sortie"),
+                        },
                         Err(e) => error!("Resampling error: {}", e),
                     }
                     required_in = r.input_frames_next();
@@ -361,7 +399,9 @@ async fn main() -> Result<()> {
                             FrameOutcome::SpeechStarted => info!("Speech started (prob: {:.2})", prob),
                             FrameOutcome::SpeechEnded(segment) => {
                                 info!("Speech ended. Captured {} samples.", segment.len());
-                                tx_speech.blocking_send((segment, None, true)).unwrap();
+                                if let Err(e) = tx_speech.blocking_send((segment, None, true)) {
+                                    fatal("le fil STT ne reçoit plus les segments", e);
+                                }
                             }
                             FrameOutcome::SpeechContinues(chunk) => {
                                 info!(
@@ -369,7 +409,9 @@ async fn main() -> Result<()> {
                                     chunk.len(),
                                     chunk.len() / 16_000
                                 );
-                                tx_speech.blocking_send((chunk, None, false)).unwrap();
+                                if let Err(e) = tx_speech.blocking_send((chunk, None, false)) {
+                                    fatal("le fil STT ne reçoit plus les segments", e);
+                                }
                             }
                             FrameOutcome::SpeechDiscarded { speech_frames } => info!(
                                 "Speech discarded: only {} speech frame(s) (~{} ms), below the minimum.",
@@ -410,10 +452,9 @@ async fn main() -> Result<()> {
             use futures::StreamExt;
             let mut sub = match nats_discord.subscribe("io.discord.voice.frame").await {
                 Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to subscribe to io.discord.voice.frame: {:?}", e);
-                    return;
-                }
+                // Sans cet abonnement, le mode Discord n'a aucune source audio : le service
+                // resterait en vie sans jamais rien entendre.
+                Err(e) => fatal("abonnement à io.discord.voice.frame", e),
             };
             info!("👂 Listening for Discord voice frames on 'io.discord.voice.frame'...");
             while let Some(msg) = sub.next().await {
@@ -433,27 +474,33 @@ async fn main() -> Result<()> {
                     }
                 };
                 let mono = stereo_i16_to_mono_f32(&pcm_bytes);
-                if tx_frame.send((frame.speaker_id, frame.speaker_name, mono)).is_err() {
-                    break;
+                if let Err(e) = tx_frame.send((frame.speaker_id, frame.speaker_name, mono)) {
+                    fatal("le fil VAD Discord ne reçoit plus les trames", e);
                 }
             }
         });
 
+        // Comme pour le micro : le modèle se charge ici pour que l'échec sorte par `?` au
+        // démarrage, avec sa cause, au lieu de tuer le fil Discord sans un mot.
+        let mut session = silero::Session::bundled()
+            .context("Failed to load Silero VAD model. Is ORT_DYLIB_PATH set? See README.")?;
+
         let tx_speech_discord = tx_speech.clone();
         std::thread::spawn(move || {
             info!("Started Discord per-speaker VAD thread");
-            use silero::Session;
-            let mut session = Session::bundled()
-                .expect("Failed to load Silero VAD model. Is ORT_DYLIB_PATH set? See README.");
             let mut pipelines: std::collections::HashMap<String, (String, SpeakerPipeline)> =
                 std::collections::HashMap::new();
 
             while let Ok((speaker_id, speaker_name, mono_48k)) = rx_frame.recv() {
-                let entry = pipelines
-                    .entry(speaker_id)
-                    .or_insert_with(|| (speaker_name.clone(), SpeakerPipeline::new()));
-                entry.0 = speaker_name;
-                let (name, pipeline) = entry;
+                use std::collections::hash_map::Entry;
+                let (name, pipeline) = match pipelines.entry(speaker_id) {
+                    Entry::Occupied(e) => e.into_mut(),
+                    Entry::Vacant(e) => match SpeakerPipeline::new() {
+                        Ok(p) => e.insert((speaker_name.clone(), p)),
+                        Err(err) => fatal("initialisation du pipeline d'un locuteur Discord", err),
+                    },
+                };
+                *name = speaker_name;
 
                 for (chunk, is_final) in pipeline.push_mono_48k(&mut session, &mono_48k) {
                     if is_final {
@@ -461,11 +508,10 @@ async fn main() -> Result<()> {
                     } else {
                         info!("Speech still running for {}. Forced cut at {} samples.", name, chunk.len());
                     }
-                    if tx_speech_discord
-                        .blocking_send((chunk, Some(name.clone()), is_final))
-                        .is_err()
+                    if let Err(e) =
+                        tx_speech_discord.blocking_send((chunk, Some(name.clone()), is_final))
                     {
-                        return;
+                        fatal("le fil STT ne reçoit plus les segments Discord", e);
                     }
                 }
             }
@@ -605,8 +651,8 @@ async fn main() -> Result<()> {
                 if full.is_empty() {
                     continue;
                 }
-                if tx_text.blocking_send((full, speaker)).is_err() {
-                    return;
+                if let Err(e) = tx_text.blocking_send((full, speaker)) {
+                    fatal("la boucle de publication ne reçoit plus les transcriptions", e);
                 }
             }
         });
@@ -624,5 +670,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    Ok(())
+    // On ne sort de ces boucles que si la chaîne amont a disparu : plus personne ne peut
+    // publier, et rester en vie ne ferait que masquer la panne.
+    anyhow::bail!("the transcription pipeline closed: io_oreilles cannot hear any more")
 }

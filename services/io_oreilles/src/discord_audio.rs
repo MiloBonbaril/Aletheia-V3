@@ -33,7 +33,7 @@ pub fn stereo_i16_to_mono_f32(pcm: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-fn new_resampler() -> SincFixedIn<f32> {
+fn new_resampler() -> Result<SincFixedIn<f32>, rubato::ResamplerConstructionError> {
     let params = SincInterpolationParameters {
         sinc_len: 256,
         f_cutoff: 0.95,
@@ -42,7 +42,6 @@ fn new_resampler() -> SincFixedIn<f32> {
         window: WindowFunction::BlackmanHarris2,
     };
     SincFixedIn::<f32>::new(TARGET_SAMPLE_RATE / SOURCE_SAMPLE_RATE, 2.0, params, 1024, 1)
-        .expect("Failed to init per-speaker resampler")
 }
 
 pub struct SpeakerPipeline {
@@ -54,14 +53,17 @@ pub struct SpeakerPipeline {
 }
 
 impl SpeakerPipeline {
-    pub fn new() -> Self {
-        Self {
-            resampler: new_resampler(),
+    /// Fails only on an invalid resampler ratio. It is a constant here, so a failure is a
+    /// start-up fault, not something that appears on the tenth speaker. The caller stops the
+    /// service with the cause: a panic inside the Discord thread left the service deaf.
+    pub fn new() -> Result<Self, rubato::ResamplerConstructionError> {
+        Ok(Self {
+            resampler: new_resampler()?,
             internal_buf: Vec::new(),
             vad_buf: Vec::new(),
             stream_state: StreamState::new(SampleRate::Rate16k),
             segmenter: VadSegmenter::new(),
-        }
+        })
     }
 
     /// Feed a chunk of mono 48kHz samples; returns any audio chunks (16kHz f32) that came
@@ -79,7 +81,11 @@ impl SpeakerPipeline {
         while self.internal_buf.len() >= required_in {
             let to_process: Vec<f32> = self.internal_buf.drain(0..required_in).collect();
             match self.resampler.process(&[to_process], None) {
-                Ok(mut out) => self.vad_buf.extend(out.pop().unwrap()),
+                // Un canal exactement, fixé à la construction (cf. `new_resampler`).
+                Ok(mut out) => match out.pop() {
+                    Some(channel) => self.vad_buf.extend(channel),
+                    None => crate::fatal("rééchantillonnage Discord", "aucun canal en sortie"),
+                },
                 Err(e) => tracing::error!("Per-speaker resampling error: {}", e),
             }
             required_in = self.resampler.input_frames_next();

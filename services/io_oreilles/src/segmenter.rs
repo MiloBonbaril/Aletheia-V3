@@ -26,6 +26,16 @@ const MIN_CHUNK_SAMPLES: usize = 15 * 16_000;
 /// Fallback when the speaker never paused: cut flat, and carry this much audio into the next
 /// chunk so the split word appears whole in it.
 const HARD_CUT_OVERLAP_SAMPLES: usize = 16_000 / 2; // 500 ms
+/// Audio kept ahead of the first speech frame. Silero needs a moment to cross the threshold,
+/// so the attack of the first word is already in the past when the segment opens — and Whisper
+/// mangles a word whose attack is missing: cutting 100/200/300 ms off the start turns
+/// "J'ai lancé le benchmark" into "et lance le…" then "Lance le…".
+/// Measured on the 20 segments of the bench corpus, Silero fires 0 frames after the acoustic
+/// onset in the median and 3 frames (96 ms) in the worst case. 7 frames is 2.3x that worst
+/// case; the margin costs ~2 ms, because Whisper pads every segment to 30 s anyway.
+/// See docs/audits/io_oreilles-2026-09-07.md, F4.
+const PREROLL_FRAMES: usize = 7; // ~224 ms
+const PREROLL_SAMPLES: usize = PREROLL_FRAMES * 512;
 
 /// What happened when a scored frame was pushed into the segmenter.
 pub enum FrameOutcome {
@@ -54,6 +64,10 @@ pub struct VadSegmenter {
     /// `MIN_SPEECH_FRAMES` rule on the final chunk: the tail of a long sentence is short by
     /// nature, and dropping it would also drop the text held for the whole utterance.
     emitted_partial: bool,
+    /// The most recent idle frames, kept so the segment can open before the first speech frame.
+    /// ponytail: `Vec` avec `drain`, pas de `VecDeque`. 3584 échantillons déplacés toutes les
+    /// 32 ms, c'est gratuit, et `append` vide le tampon dans le segment en une ligne.
+    preroll: Vec<f32>,
 }
 
 impl VadSegmenter {
@@ -65,6 +79,7 @@ impl VadSegmenter {
             speech_frames: 0,
             last_pause_at: None,
             emitted_partial: false,
+            preroll: Vec::with_capacity(PREROLL_SAMPLES + 512),
         }
     }
 
@@ -92,6 +107,11 @@ impl VadSegmenter {
     pub fn push_frame(&mut self, frame: &[f32], prob: f32) -> FrameOutcome {
         if prob > SPEECH_PROB_THRESHOLD {
             let just_started = !self.is_speaking;
+            if just_started {
+                // Le pre-roll n'est pas de la parole : il ne compte pas dans `speech_frames`,
+                // donc il ne peut pas sauver un bruit court du rejet de MIN_SPEECH_FRAMES.
+                self.speech_buffer.append(&mut self.preroll);
+            }
             self.is_speaking = true;
             self.silence_frames = 0;
             self.speech_frames += 1;
@@ -116,6 +136,9 @@ impl VadSegmenter {
                 let speech_frames = std::mem::take(&mut self.speech_frames);
                 let emitted_partial = std::mem::take(&mut self.emitted_partial);
                 self.last_pause_at = None;
+                // L'audio d'avant ce tour est parti dans le segment : le garder ferait
+                // démarrer le tour suivant sur du son déjà transcrit.
+                self.preroll.clear();
                 if speech_frames < MIN_SPEECH_FRAMES && !emitted_partial {
                     // ponytail: on compte les trames de parole, pas la longueur du segment.
                     // Une pause au milieu d'un mot gonfle le buffer sans gonfler ce compteur,
@@ -128,6 +151,10 @@ impl VadSegmenter {
                 FrameOutcome::Speaking
             }
         } else {
+            self.preroll.extend_from_slice(frame);
+            if self.preroll.len() > PREROLL_SAMPLES {
+                self.preroll.drain(0..self.preroll.len() - PREROLL_SAMPLES);
+            }
             FrameOutcome::Idle
         }
     }
@@ -340,6 +367,74 @@ mod tests {
             utterance(&mut seg, 1),
             FrameOutcome::SpeechDiscarded { .. }
         ));
+    }
+
+    #[test]
+    fn the_segment_carries_the_audio_before_the_first_word() {
+        let mut seg = VadSegmenter::new();
+        // Du bruit de pièce avant le mot : Silero le classe silence, mais Whisper en a besoin
+        // pour ne pas manger l'attaque. Trois fois la limite, pour vérifier qu'elle tient.
+        for _ in 0..PREROLL_FRAMES * 3 {
+            assert!(matches!(seg.push_frame(&frame(0.25), 0.1), FrameOutcome::Idle));
+        }
+        match utterance(&mut seg, MIN_SPEECH_FRAMES) {
+            FrameOutcome::SpeechEnded(segment) => {
+                assert_eq!(
+                    segment.len(),
+                    PREROLL_SAMPLES
+                        + 512
+                            * (MIN_SPEECH_FRAMES as usize + SILENCE_FRAMES_TO_END as usize + 1)
+                );
+                assert!(
+                    segment[..PREROLL_SAMPLES].iter().all(|&v| v == 0.25),
+                    "le segment doit commencer par l'audio d'avant le premier mot"
+                );
+                assert_eq!(segment[PREROLL_SAMPLES], 1.0, "puis la parole");
+            }
+            _ => panic!("expected SpeechEnded"),
+        }
+    }
+
+    #[test]
+    fn the_preroll_does_not_rescue_a_burst_too_short_to_be_a_word() {
+        // Le pre-roll allonge le segment mais n'est pas de la parole : il ne doit pas
+        // faire passer une toux au-dessus de MIN_SPEECH_FRAMES.
+        let mut seg = VadSegmenter::new();
+        for _ in 0..PREROLL_FRAMES {
+            seg.push_frame(&frame(0.25), 0.1);
+        }
+        assert!(matches!(
+            utterance(&mut seg, MIN_SPEECH_FRAMES - 1),
+            FrameOutcome::SpeechDiscarded { .. }
+        ));
+    }
+
+    #[test]
+    fn a_finished_turn_does_not_leak_into_the_next_preroll() {
+        let mut seg = VadSegmenter::new();
+        for _ in 0..PREROLL_FRAMES {
+            seg.push_frame(&frame(0.25), 0.1);
+        }
+        assert!(matches!(
+            utterance(&mut seg, MIN_SPEECH_FRAMES),
+            FrameOutcome::SpeechEnded(_)
+        ));
+        // Deux trames de silence seulement avant le tour suivant : le pre-roll ne porte
+        // que celles-là, jamais de l'audio déjà transcrit dans le tour précédent.
+        seg.push_frame(&frame(0.5), 0.1);
+        seg.push_frame(&frame(0.5), 0.1);
+        match utterance(&mut seg, MIN_SPEECH_FRAMES) {
+            FrameOutcome::SpeechEnded(segment) => {
+                assert_eq!(
+                    segment.len(),
+                    2 * 512
+                        + 512
+                            * (MIN_SPEECH_FRAMES as usize + SILENCE_FRAMES_TO_END as usize + 1)
+                );
+                assert!(segment[..1024].iter().all(|&v| v == 0.5));
+            }
+            _ => panic!("expected SpeechEnded"),
+        }
     }
 
     #[test]
