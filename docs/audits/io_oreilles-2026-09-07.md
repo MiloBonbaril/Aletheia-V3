@@ -71,20 +71,26 @@ All the measurements use `bench_stt`, the GPU, the compute type `int8_float16` a
 `whisper-large-turbo-ct2`. The VRAM column is the peak of the process alone, from
 `nvidia-smi --query-compute-apps`.
 
+**Compare only inside one table.** The absolute values move approximately 10 % between two sessions
+of the day, with the clock state of the GPU. Each table below comes from one campaign, measured one
+configuration after the other. Inside a campaign the repetition is stable: three measurements of the
+same configuration give 101.5, 101.5 and 100.9 ms.
+
 ### 3.1 The language detection is the largest latency item
 
 20 segments, 62.7 s, 3 measurements for each file.
 
 | Configuration | Median | p90 | Max | VRAM |
 |---|---|---|---|---|
-| No `STT_LANGUAGE`, beam 5 — **what the service does today** | 165.2 ms | 172.3 ms | 173.6 ms | 1602 MiB |
-| `STT_LANGUAGE=fr`, beam 5 | **92.4 ms** | 99.1 ms | 101.7 ms | 1602 MiB |
-| `STT_LANGUAGE=fr`, beam 1 | 89.4 ms | 95.9 ms | 98.7 ms | 1602 MiB |
+| `auto` — the language detection, what the service did | 181.2 ms | 190.5 ms | 194.3 ms | 1602 MiB |
+| `STT_LANGUAGE=fr` — **the default after P3** | **102.1 ms** | 109.3 ms | 113.4 ms | 1602 MiB |
 
-The language detection is one more pass of the encoder for each segment. It costs 73 ms.
+The language detection is one more pass of the encoder for each segment. It costs **79 ms**, which
+is 44 % of the transcription time.
 
-The beam size is not a control here. It gives 3 ms and 0 MiB. The turbo model has only 4 decoder
-layers, and the answers are short. Do not change it.
+The beam size is not a control here. A separate campaign gives 92.4 ms at beam 5 and 89.4 ms at
+beam 1, for the same 1602 MiB: 3 ms and 0 MiB. The turbo model has only 4 decoder layers, and the
+answers are short. Do not change it.
 
 ### 3.2 A segment longer than 30 s multiplies the windows
 
@@ -205,6 +211,8 @@ The model does not lose the audio, but it loses the text at each joint of 30 s (
 model": today they do not, and nothing tells the operator.
 
 ### F3 — DEFECT — `STT_LANGUAGE` has no value, and the transcription costs 44 % more
+
+**Status: corrected. See P3.**
 
 **Evidence:** `main.rs:524` reads the variable and gives `None` to Whisper when it is absent. No Rust
 service reads a `.env` file: no `Cargo.toml` in `services/` contains `dotenv`. Section 3.1 measures
@@ -339,28 +347,39 @@ repeated word in the chunk version, thus all the cuts landed in a pause.
 cut in the pause, the overlap of the flat cut, the maximum size of a chunk on 90 s of speech, the
 last chunk that P1 must not reject, and the return to the P1 rule after the turn.
 
-### P3 — for F3 — Give `STT_LANGUAGE` a default value
+### P3 — for F3 — Give `STT_LANGUAGE` a default value — **APPLIED 2026-09-07**
 
-**Change:** `main.rs:524` becomes a default to `fr`, with the same pattern as `STT_MODEL_PATH` at
-`main.rs:519`. The value `auto` keeps the language detection.
+**Change:** the service resolves the language with the same pattern as `STT_MODEL_PATH`. `auto`
+keeps the language detection, an empty value takes the default.
 
 ```rust
-let stt_language = match std::env::var("STT_LANGUAGE").as_deref() {
+let stt_language: Option<String> = match std::env::var("STT_LANGUAGE").as_deref() {
     Ok("auto") => None,
-    Ok(l) => Some(l.to_string()),
-    Err(_) => Some("fr".to_string()),
+    Ok(lang) if !lang.is_empty() => Some(lang.to_string()),
+    _ => Some("fr".to_string()),
 };
 ```
 
-**Files:** `src/main.rs` (4 lines), plus the README table.
+`bench_stt` uses the same resolution. To measure with the language detection while the service runs
+in French is what hid these 79 ms. The bench also writes the language in its header line.
+
+**Files:** `src/main.rs` (5 lines), `src/bin/bench_stt.rs` (5 lines), plus the README.
 
 **New risk:** the service transcribes English speech as French. Aletheia speaks French with a French
-user, thus this is correct. `STT_LANGUAGE=auto` gives the old behaviour.
+user, thus this is correct. `STT_LANGUAGE=auto` gives the old behaviour, and `STT_LANGUAGE=en` forces
+English. The variable stays, because a build of CTranslate2 with CUDA takes a quarter of an hour: it
+must not be the price of a change of language.
 
-**Value:** 73 ms, which is 44 % of the transcription time.
+**Proof, measured on the 20 segments of the corpus, one campaign:**
 
-**Proof:** `bench_stt --dir wavs/` with and without the variable. The medians must be 92 ms and
-165 ms.
+| Language | Median | p90 | Max | VRAM |
+|---|---|---|---|---|
+| `auto` | 181.2 ms | 190.5 ms | 194.3 ms | 1602 MiB |
+| `fr` (the default, with no variable in the environment) | **102.1 ms** | 109.3 ms | 113.4 ms | 1602 MiB |
+
+79 ms, which is 44 %. Three repetitions of the `fr` configuration give 101.5, 101.5 and 100.9 ms,
+thus the measurement is stable. The header line of the bench shows `langue=fr` with no variable in
+the environment, and `langue=auto` with `STT_LANGUAGE=auto`: the two paths work.
 
 **The other solution:** add the `dotenvy` crate and a `.env.example` file. This agrees with
 `CLAUDE.md:146`, but it adds a dependency to three Rust services for one variable. The audit

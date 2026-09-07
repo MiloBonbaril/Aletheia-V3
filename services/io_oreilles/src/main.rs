@@ -521,7 +521,7 @@ async fn main() -> Result<()> {
             // réglage ne fait rien gagner ici. Il fige le budget VRAM au lieu de le
             // laisser dépendre du GPU : mesuré sur large-v3-turbo, 1602 Mio en
             // int8_float16 contre 2658 Mio en float16 forcé. Un écart de 1 Go décide
-            // si le STT tient sur la carte à côté de gemma et de Kokoro.
+            // si le STT tient sur la carte à côté de gemma et d'Audio8.
             // ponytail: pas de branche CPU. Sans support float16, CTranslate2 retombe
             // seul sur int8_float32 — et le CPU n'est de toute façon pas temps réel ici.
             compute_type: ct2rs::ComputeType::INT8_FLOAT16,
@@ -546,7 +546,18 @@ async fn main() -> Result<()> {
         let whisper = ct2rs::Whisper::new(&model_path, whisper_config)
             .with_context(|| format!("Failed to load Whisper model from {model_path}. See README."))?;
         let whisper_options = ct2rs::WhisperOptions::default();
-        let stt_language: Option<String> = std::env::var("STT_LANGUAGE").ok();
+        // Le français par défaut. Sans valeur, ct2rs passe `None` et Whisper détecte la langue
+        // à chaque segment : une passe d'encodeur en plus, mesurée à 73 ms, soit 44 % du temps
+        // de transcription (165 ms contre 92 ms sur le corpus de bench). Aletheia parle français
+        // avec un utilisateur français, donc ce budget n'achète rien.
+        // Le garde-fou reste : `STT_LANGUAGE=auto` rend la détection, `STT_LANGUAGE=en` force
+        // l'anglais. Rebâtir CTranslate2 avec CUDA prend un quart d'heure — ça ne doit pas être
+        // le prix d'un changement de langue.
+        let stt_language: Option<String> = match std::env::var("STT_LANGUAGE").as_deref() {
+            Ok("auto") => None,
+            Ok(lang) if !lang.is_empty() => Some(lang.to_string()),
+            _ => Some("fr".to_string()),
+        };
 
         // `whisper.generate` est du calcul synchrone (CPU ou GPU) : le laisser sur la boucle
         // Tokio bloquait tout le runtime, y compris les publications NATS. En mode Discord,

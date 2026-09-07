@@ -52,7 +52,7 @@ python -c "from huggingface_hub import hf_hub_download; import shutil; shutil.co
 | Variable | Default | Function |
 |---|---|---|
 | `NATS_URL` | `nats://localhost:4222` | The address of the NATS broker. |
-| `STT_LANGUAGE` | — | The transcription language, for example `fr`. |
+| `STT_LANGUAGE` | `fr` | The transcription language. Set `auto` for the language detection, or a code such as `en`. |
 | `STT_MODEL_PATH` | `model/whisper-large-turbo-ct2` | The path of the CTranslate2 model. |
 | `RAW_AUDIO` | not set | Set it to `1` or `true` to publish the raw audio on `io.user.speak.raw` and to skip the transcription. |
 | `ORT_DYLIB_PATH` | found automatically | The path of `libonnxruntime.so`. |
@@ -171,18 +171,30 @@ cargo run --release --features cuda --bin bench_stt -- --dir /path/to/wavs --dev
 | `--repeats` | 3 | The number of measurements for each file. |
 | `--threads` | 16 | The CPU threads for each replica. |
 
-Measured on 20 French segments (64.7 s of audio), on an RTX 5070 Ti, with automatic language
-detection. The VRAM column is the peak of the process alone, from `nvidia-smi`:
+Measured on 20 French segments (62.7 s of audio), on an RTX 5070 Ti, with `STT_LANGUAGE=fr`, and
+3 measurements for each file. The VRAM column is the peak of the process alone, from `nvidia-smi`.
+The four rows come from one campaign, one after the other:
 
-| Model | Compute type | Median | p90 | Max | Real-time factor | VRAM |
-|---|---|---|---|---|---|---|
-| `whisper-small` | int8_float16 | **78 ms** | 98 ms | 111 ms | 0.025× | 770 MiB |
-| `large-v3-turbo` | int8_float16 | **165 ms** | 174 ms | 179 ms | 0.051× | 1602 MiB |
-| `large-v3-turbo` | float16 | 184 ms | 192 ms | 197 ms | 0.056× | 2658 MiB |
+| Model | Compute type | Language | Median | p90 | Max | Real-time factor | VRAM |
+|---|---|---|---|---|---|---|---|
+| `large-v3-turbo` | int8_float16 | `fr` (the default) | **102 ms** | 109 ms | 113 ms | 0.032× | 1602 MiB |
+| `large-v3-turbo` | int8_float16 | `auto` | 181 ms | 191 ms | 194 ms | 0.058× | 1602 MiB |
+| `large-v3-turbo` | float16 | `fr` | 111 ms | 119 ms | 141 ms | 0.036× | 2658 MiB |
+| `whisper-small` | int8_float16 | `fr` | 68 ms | 83 ms | 87 ms | 0.021× | 770 MiB |
 
-`large-v3-turbo` costs 87 ms and 832 MiB more than `small`. It has the encoder of `large-v3` (32
+The language detection is one more pass of the encoder for each segment. It costs **79 ms**, which
+is 44 % of the transcription time. This is the reason for the default value `fr`.
+
+`large-v3-turbo` costs 34 ms and 832 MiB more than `small`. It has the encoder of `large-v3` (32
 layers) but only 4 decoder layers, thus it stays far from the cost of the full `large-v3`. The int8
-weights save 1056 MiB and 19 ms against float16.
+weights save 1056 MiB and 9 ms against float16.
+
+The beam size is not a control here. A measurement at `beam_size = 1` gives 0 MiB and 3 ms, because
+the turbo model has only 4 decoder layers and the answers are short. Keep the default of 5.
+
+Compare only inside one table. The absolute values move approximately 10 % between two sessions,
+with the clock state of the GPU. Inside one campaign, three measurements of the same configuration
+stay in 1 % (101.5, 101.5 and 100.9 ms).
 
 An older measurement on 28 real segments (61.9 s), with `whisper-small`, gives 10038 ms as the
 median on the CPU (OpenBLAS, 16 threads), which is 4.64 times the real time. The CPU is not usable

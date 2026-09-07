@@ -95,9 +95,20 @@ fn main() -> Result<()> {
     let load_ms = t_load.elapsed().as_secs_f64() * 1000.0;
 
     let options = ct2rs::WhisperOptions::default();
-    let lang: Option<String> = std::env::var("STT_LANGUAGE").ok();
+    // Même résolution que le service (cf. src/main.rs) : le bench doit mesurer ce que la
+    // production vit. Mesurer en détection automatique pendant que le service tourne en `fr`
+    // est exactement ce qui a caché 73 ms pendant des mois.
+    let lang: Option<String> = match std::env::var("STT_LANGUAGE").as_deref() {
+        Ok("auto") => None,
+        Ok(l) if !l.is_empty() => Some(l.to_string()),
+        _ => Some("fr".to_string()),
+    };
 
-    println!("device={device} compute={compute} model={model} fichiers={} répétitions={repeats}", files.len());
+    println!(
+        "device={device} compute={compute} langue={} model={model} fichiers={} répétitions={repeats}",
+        lang.as_deref().unwrap_or("auto"),
+        files.len()
+    );
     println!("chargement du modèle: {load_ms:.0} ms\n");
 
     // Warm-up : première inférence (alloc CUDA, caches) exclue des stats.
