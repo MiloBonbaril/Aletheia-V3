@@ -68,11 +68,12 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   references on `io.voice.speak.start` and `.end`. It downloads the model (approximately 1.3 GB)
   into `models/audio8-tts-0.6b/` at the first start. The model is autoregressive, thus `engine.py`
   gives the audio of one fragment in chunks that become longer, to keep the time to first audio low
-  (120 ms end to end, real-time factor 0.32). The GPU is necessary, and the CUDA graphs of
+  (120 ms end to end, real-time factor 0.22). The GPU is necessary, and the CUDA graphs of
   `engine.py` are necessary too: without them the real-time factor is 2.2 and the service holds no
   target. The service handles one fragment at a time, because the KV caches and the captured graphs
   are shared. The output is 44.1 kHz. The voice comes from a reference recording (`A8_VOICE_WAV`,
-  `A8_VOICE_TEXT`), because Audio8 has no voice presets.
+  `A8_VOICE_TEXT`), because Audio8 has no voice presets. Without a reference the model
+  invents a new voice for each fragment: give one.
 - **io_discord** (Python) — the Discord gateway (`bot.py`, cogs in `cogs/`). It bridges Discord and
   `io.user.msg.text` / `lobe.fragment_stream`. It also streams the voice audio in the two
   directions, publishes the voice presence, and holds an independent bets function.

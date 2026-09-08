@@ -30,6 +30,17 @@ import os
 from typing import Iterator, NamedTuple, Optional
 
 import numpy as np
+
+# Le cache de compilation d'Inductor va par défaut dans /tmp/torchinductor_$USER, et /tmp
+# est un tmpfs sur la plupart des installations : il disparaît à chaque redémarrage, donc
+# la compilation à froid (environ 110 s) revient à chaque fois. Sur un chemin persistant
+# elle n'arrive qu'une fois par machine, et les démarrages suivants prennent 4 s.
+# À définir avant l'import de torch. Occupe environ 430 Mo.
+os.environ.setdefault(
+    "TORCHINDUCTOR_CACHE_DIR",
+    os.path.join(os.path.dirname(__file__), "models", ".inductor-cache"),
+)
+
 import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoProcessor
@@ -99,23 +110,65 @@ def _pin_generation_caches(model) -> None:
     model._setup_generation_caches = setup_once
 
 
+def _fast_step_positions(model):
+    """Réécrit `_fast_step` avec `cache_position` en tenseur, et vérifie l'équivalence.
+
+    L'original prend `position` en int Python et construit `torch.tensor([position])`
+    dans le graphe. Dynamo spécialise donc sur la valeur : dix graphes pour les dix
+    codebooks, plus un pour le Slow AR. C'est le poste dominant du démarrage — 178 s de
+    compilation à froid, 31 s à chaud.
+
+    En passant le tenseur déjà construit, il n'y a plus d'int à spécialiser : deux
+    graphes au lieu de onze. La compilation tombe à 73 s à froid et 4 s à chaud, et le
+    débit s'améliore aussi (RTF 0,32 -> 0,21) parce qu'un graphe générique se rejoue
+    sans faire tourner le pool de graphes capturés.
+
+    Le corps est recopié du modèle, donc l'assertion en fin de fonction est le garde-fou :
+    elle compare la réécriture à l'originale et casse au démarrage si Audio8 change son
+    `_fast_step`. La révision est épinglée, mais un `A8_MODEL_DIR` local peut diverger.
+    """
+    positions = [
+        torch.tensor([index], device=model.device, dtype=torch.long)
+        for index in range(model.config.num_codebooks)
+    ]
+
+    def fast_body(hidden, cache_position):
+        rope = model.fast_freqs_cis[cache_position]
+        key_mask = torch.ones(
+            (hidden.shape[0], model.config.num_codebooks), device=hidden.device, dtype=torch.bool
+        )
+        mask = model._causal_mask(key_mask, cache_position, model.config.num_codebooks)
+        for layer in model.fast_layers:
+            hidden = layer(hidden, rope, mask, cache_position)
+        return model.fast_output(model.fast_norm(hidden))[:, -1]
+
+    probe = torch.randn(1, 1, model.config.dim, device=model.device, dtype=model.dtype)
+    with torch.inference_mode():
+        model._setup_generation_caches(1, model.config.max_seq_len, model.dtype)
+        expected = model._fast_step(probe.clone(), 3).clone()
+        model._setup_generation_caches(1, model.config.max_seq_len, model.dtype)
+        actual = fast_body(probe.clone(), positions[3]).clone()
+    delta = (expected.float() - actual.float()).abs().max().item()
+    if delta != 0.0:
+        raise SystemExit(
+            f"La réécriture de _fast_step ne correspond plus au modèle (écart {delta}). "
+            "Audio8 a changé cette fonction : reprenez `fast_body` sur la nouvelle version."
+        )
+    return fast_body, positions
+
+
 def _compile_hot_loops(model) -> None:
     """Capture les deux boucles chaudes en graphes CUDA (points 1 et 2 de l'en-tête)."""
     key_length = model.config.max_seq_len
 
-    # `_fast_step(hidden, position)` reçoit `position` en int Python, de 0 à 9. Dynamo
-    # spécialise sur la valeur, donc dix graphes — au-dessus du plafond de huit, où les
-    # positions 8 et 9 retombent en eager et perdent le bénéfice des graphes.
-    torch._dynamo.config.recompile_limit = max(
-        torch._dynamo.config.recompile_limit, model.config.num_codebooks + 4
-    )
+    fast_body, positions = _fast_step_positions(model)
 
     # Les sorties d'un graphe CUDA sont des tampons réécrits au replay suivant, et la
     # boucle de `generate()` garde `logits` en vie pendant les 10 pas du Fast AR. Sans
     # `.clone()`, PyTorch lève « accessing tensor output of CUDAGraphs that has been
     # overwritten ». Cloner coûte 311 Kio par frame, soit rien.
-    compiled_fast = torch.compile(model._fast_step, mode="reduce-overhead", dynamic=False)
-    model._fast_step = lambda hidden, position: compiled_fast(hidden, position).clone()
+    compiled_fast = torch.compile(fast_body, mode="reduce-overhead", dynamic=False)
+    model._fast_step = lambda hidden, position: compiled_fast(hidden, positions[position]).clone()
 
     eager_slow = model._slow_step
     compiled_slow = torch.compile(eager_slow, mode="reduce-overhead", dynamic=False)
@@ -175,9 +228,11 @@ def build_engine() -> Engine:
     else:
         print(f"🔢 Poids en bfloat16 (A8_QUANT={QUANT}).")
 
-    _pin_generation_caches(model)
+    # `_compile_hot_loops` d'abord : sa vérification d'équivalence réalloue les caches,
+    # ce que `_pin_generation_caches` transforme ensuite en no-op.
     if torch.cuda.is_available():
         _compile_hot_loops(model)
+    _pin_generation_caches(model)
 
     # Le codec reste en float32. Il est plus précis ET plus rapide que bfloat16 ici
     # (127 ms contre 337 ms pour 67 frames : les convolutions bf16 tombent sur de
@@ -193,7 +248,12 @@ def build_engine() -> Engine:
         reference_codes = _encode_reference(model, processor, VOICE_WAV, VOICE_TEXT)
         print(f"🎙️ Voix de référence : {VOICE_WAV} ({reference_codes.shape[1]} frames).")
     else:
-        print("🎙️ Aucune voix de référence — voix par défaut du modèle.")
+        print(
+            "⚠️ Aucune voix de référence (A8_VOICE_WAV / A8_VOICE_TEXT).\n"
+            "   Audio8 tire alors une voix au hasard À CHAQUE FRAGMENT : la hauteur mesurée\n"
+            "   varie de 108 à 215 Hz d'une phrase à l'autre, soit un locuteur différent à\n"
+            "   chaque fois. Donnez une référence pour figer la voix (écart ramené à 2 %)."
+        )
 
     return Engine(
         model=model,
