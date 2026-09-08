@@ -83,6 +83,7 @@ class Entry:
     rebuild: list[str] | None = None
     stale_src: str | None = None
     ready_tcp: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
     depends_on: list[str] = field(default_factory=list)
     note: str | None = None
 
@@ -114,6 +115,7 @@ class Manifest:
                 rebuild=subst(s["rebuild"]) if s.get("rebuild") else None,
                 stale_src=s.get("stale_src"),
                 ready_tcp=s.get("ready_tcp"),
+                env={k: str(v) for k, v in s.get("env", {}).items()},
                 depends_on=s.get("depends_on", []),
                 note=s.get("note"),
             )
@@ -197,7 +199,7 @@ class Service:
     async def _start_process(self) -> None:
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0))
-        env = dict(os.environ, TERM="xterm-256color", PYTHONUNBUFFERED="1")
+        env = dict(os.environ, TERM="xterm-256color", PYTHONUNBUFFERED="1", **self.entry.env)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *self.entry.cmd,

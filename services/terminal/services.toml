@@ -14,6 +14,9 @@
 #   rebuild     an optional command that rebuilds the service
 #   stale_src   an optional source directory. The console shows a "stale" badge
 #               when a file in it is newer than the first item of cmd.
+#   ready_tcp   an optional "host:port". The start sequence waits for the port.
+#   env         an optional [service.env] table. These variables go into the
+#               environment of the process, above the environment of the daemon.
 #   depends_on  documentation only. The daemon does not apply it.
 #   note        a free remark that the console shows on the card
 
@@ -131,6 +134,25 @@ kind = "process"
 cwd = "services/io_voix"
 cmd = ["{python}", "main.py"]
 depends_on = ["nats"]
+note = "Local playback on. Reference voice: Unicorn (fr-FR)."
+
+  [service.env]
+  A8_VOICE_WAV = "voices/Default - Unicorn_unselect_01_fr-FR_dubbed.mp3"
+  A8_VOICE_TEXT = "Je bosse sur un nouveau numéro où j'enveloppe un spectateur de flammes éthérées. J'ai pas encore trouvé comment faire sans immoler quelqu'un, mais j'y suis presque. Sûrement..."
+
+[[service]]
+name = "io_voix_muet"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_voix"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats"]
+note = "No local playback: the audio goes to NATS only. Do not start it with io_voix."
+
+  [service.env]
+  A8_VOICE_WAV = "voices/Default - Unicorn_unselect_01_fr-FR_dubbed.mp3"
+  A8_VOICE_TEXT = "Je bosse sur un nouveau numéro où j'enveloppe un spectateur de flammes éthérées. J'ai pas encore trouvé comment faire sans immoler quelqu'un, mais j'y suis presque. Sûrement..."
+  MUTE_LOCAL_PLAYBACK = "1"
 
 [[service]]
 name = "io_discord"
@@ -166,7 +188,7 @@ services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbi
 services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal"]
 
 [profile.discord]
-services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_discord", "io_oreilles_discord", "io_voix"]
+services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_discord", "io_oreilles_discord", "io_voix_muet"]
 
 [profile.infra]
 services = ["nats", "datastores", "llama-server"]

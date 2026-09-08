@@ -42,6 +42,27 @@ def test_manifest_loads_and_resolves_paths():
     assert cortex.rebuild == ["cargo", "build", "--release"]
 
 
+def test_the_two_io_voix_entries_differ_only_by_the_local_playback():
+    manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
+    entries = {e.name: e for e in manifest.entries}
+    loud, muted = entries["io_voix"], entries["io_voix_muet"]
+    assert loud.cmd == muted.cmd and loud.cwd == muted.cwd
+    assert muted.env["MUTE_LOCAL_PLAYBACK"] == "1"
+    assert "MUTE_LOCAL_PLAYBACK" not in loud.env
+    for entry in (loud, muted):
+        assert entry.env["A8_VOICE_TEXT"].strip()
+        # engine.py exits when A8_VOICE_WAV has no A8_VOICE_TEXT beside it.
+        assert (entry.cwd / entry.env["A8_VOICE_WAV"]).is_file()
+
+
+def test_no_profile_starts_two_services_that_share_a_device():
+    """io_voix and io_voix_muet share the speaker; the io_oreilles pair shares the audio input."""
+    manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
+    for name, members in manifest.profiles.items():
+        for pair in ({"io_voix", "io_voix_muet"}, {"io_oreilles", "io_oreilles_discord"}):
+            assert not pair <= set(members), f"le profil {name} lance {pair} ensemble"
+
+
 def test_every_profile_names_known_services():
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
     known = {e.name for e in manifest.entries}

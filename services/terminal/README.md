@@ -57,6 +57,7 @@ order.
 | `rebuild`    | A command that rebuilds the service.                                         |
 | `stale_src`  | A source directory. The console shows "périmé" when a file is newer.         |
 | `ready_tcp`  | A `host:port`. The start sequence waits until the port answers.              |
+| `env`        | A `[service.env]` table of variables for the process.                        |
 | `depends_on` | Documentation only. The daemon does not apply it.                            |
 | `note`       | A remark that the console shows on the card.                                 |
 
@@ -87,6 +88,20 @@ The daemon gives a pseudo-terminal to each child, because two services need one:
   when the terminal buffer becomes full.
 - `io_text` is an interactive editor. Start it in your own terminal. The console shows its state
   only.
+
+## 🔀 The pairs that share a device
+
+Four entries come in two pairs. Each pair is the same program with a different environment, and the
+two members of a pair must never run together. A test holds that rule for every profile.
+
+- `io_oreilles` / `io_oreilles_discord`: the local microphone, or the per-speaker audio of a
+  Discord voice channel (`--discord`).
+- `io_voix` / `io_voix_muet`: the local speaker, or `MUTE_LOCAL_PLAYBACK=1`, which publishes the
+  audio on NATS only. Use the muted one with `io_discord`, because the bot plays the audio itself.
+
+Both `io_voix` entries carry `A8_VOICE_WAV` and `A8_VOICE_TEXT` in their `[service.env]`. Without a
+reference voice, Audio8 invents a new voice for each fragment. The recording lives in
+`services/io_voix/voices/`, and `A8_VOICE_TEXT` must be its exact transcript.
 
 ## 🦀 The Rust services
 
