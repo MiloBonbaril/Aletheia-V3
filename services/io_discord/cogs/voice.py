@@ -102,7 +102,7 @@ class Voice(commands.Cog):
 
     async def setup_nats(self):
         try:
-            self.nc = await nats.connect("nats://localhost:4222")
+            self.nc = await nats.connect("nats://localhost:4222", name="io_discord")
             self.logger.info("Connected to NATS.")
             await self.nc.subscribe("io.voice.speak.audio", cb=self._on_speak_audio)
         except Exception as e:

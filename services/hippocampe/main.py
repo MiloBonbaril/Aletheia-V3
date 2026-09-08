@@ -25,7 +25,7 @@ async def main():
 
     print("🧠 Hippocampe en attente de connexion à NATS...")
     try:
-        nc = await nats.connect("nats://localhost:4222")
+        nc = await nats.connect("nats://localhost:4222", name="hippocampe")
     except Exception as e:
         print(f"Erreur de connexion à NATS: {e}")
         return

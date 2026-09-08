@@ -86,7 +86,7 @@ async def main():
         return await loop.run_in_executor(inference_executor, build_engine)
 
     engine_task = asyncio.create_task(load_engine())
-    nats_task = asyncio.create_task(nats.connect("nats://localhost:4222"))
+    nats_task = asyncio.create_task(nats.connect("nats://localhost:4222", name="io_voix"))
 
     engine, nc = await asyncio.gather(engine_task, nats_task)
     print(f"🚀 Matériel synchronisé et connecté à NATS ({engine.sample_rate} Hz).")

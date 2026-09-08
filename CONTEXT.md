@@ -52,3 +52,25 @@ The UUID that the cortex gives to one interaction. It travels on `cortex.prompt`
 `hippocampe.context.build`, `hippocampe.context.ready` and `cortex.interaction.started`. It lets the
 lobe_frontal find the correct context, and it lets the cortex track the session.
 _Avoid_: request id, trace id
+
+**Daemon**:
+The process of the `terminal` service that owns the managed services. It starts them, it stops
+them, it reads their output and it samples their resources. It serves the console on
+`127.0.0.1:7420`. It kills every managed service when it stops.
+_Avoid_: supervisor, backend, server
+
+**Console**:
+The web interface that the daemon serves. It shows the state of each managed service, the resources
+of the host, and the logs. It sends commands, and it makes no decision.
+_Avoid_: dashboard, panel, UI, terminal
+
+**Managed service**:
+One entry of `services/terminal/services.toml`. It is a process that the daemon starts as a child,
+or a Docker Compose stack that it starts detached. `llama-server` is a managed service, although it
+is not in `services/`. `io_visage` and `io_yeux` are not, because they have no source code.
+_Avoid_: managed process, unit, target
+
+**Profile**:
+A named subset of managed services in `services/terminal/services.toml`. The daemon starts a profile
+in the order of the manifest. It is different from a `gate` of the limbic, which is a condition.
+_Avoid_: preset, launch set, scenario

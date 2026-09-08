@@ -332,7 +332,7 @@ async def main():
     nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
     console.print(f"🔌 Connexion au broker NATS sur {nats_url}...")
     try:
-        nc = await nats.connect(nats_url)
+        nc = await nats.connect(nats_url, name="benchmark")
         console.print("[bold green]✅ Connecté au bus NATS avec succès ![/bold green]")
     except Exception as e:
         console.print(f"[bold red]💀 Impossible de se connecter à NATS : {e}[/bold red]")

@@ -42,7 +42,7 @@ class Text(commands.Cog):
 
     async def setup_nats(self):
         try:
-            self.nc = await nats.connect("nats://localhost:4222")
+            self.nc = await nats.connect("nats://localhost:4222", name="io_discord")
             self.logger.info("Connected to NATS.")
             await self.nc.subscribe("lobe.fragment_stream", cb=self.on_fragment)
         except Exception as e:

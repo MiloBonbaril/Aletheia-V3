@@ -25,7 +25,7 @@ TOPIC_PREFIX = "Système: Tu t'ennuies, lance une conversation sur le sujet suiv
 async def main():
     print("🎭 Démarrage du service Limbic...")
     try:
-        nc = await nats.connect(NATS_URL)
+        nc = await nats.connect(NATS_URL, name="limbic")
         print("✅ Connecté au système nerveux (NATS).")
     except Exception as e:
         print(f"❌ Erreur de connexion à NATS: {e}")

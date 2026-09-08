@@ -80,13 +80,30 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   with the `:w`, `:q` and `:c` commands.
 - **benchmark** (`services/benchmark`) — it subscribes passively to NATS with an event graph
   (`graphs/E2E.json`, `graphs/T2T.json`) and rebuilds the end-to-end latency of a message.
-- **io_yeux**, **io_visage**, **terminal** — Twitch and YouTube chat aggregation, VTube Studio
-  control, and the admin dashboard. These three contain a README file only. There is no source code.
+- **terminal** (`services/terminal`, Python) — the local control panel. A **daemon** (aiohttp) owns
+  the processes of the other services and serves a **console** (Preact, no build step) on
+  `127.0.0.1:7420`. It starts, stops, rebuilds and monitors each service, and it keeps a buffer of
+  2000 log lines for each one in memory. `services.toml` is the manifest: it declares the command,
+  the group, the start order and the named profiles. The daemon kills every service when it stops,
+  and it never restarts a crashed one. It reads the bus through the monitoring endpoint of NATS
+  (`/varz`, `/connz`), never through a subscription, thus no payload passes through it. See
+  `docs/adr/0003-terminal-superviseur-de-processus-local.md`.
+- **io_yeux**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
+  two contain a README file only. There is no source code.
 
 Each service starts independently. Each one has its own `requirements.txt` (Python) or `Cargo.toml`
 (Rust). There is no shared build system and no workspace.
 
 ## Commands
+
+The `terminal` service starts and stops everything else from one web page. Prefer it to the manual
+commands below:
+
+```bash
+cd services/terminal && ../../venv/bin/python main.py   # then open http://127.0.0.1:7420
+```
+
+It owns the processes it starts, thus it kills every service when you stop it.
 
 Start the event bus. All the other services need it:
 
@@ -100,8 +117,8 @@ Start the datastores of the hippocampe:
 cd services/hippocampe && docker compose up -d   # PostgreSQL 5432, Qdrant 6333/6334
 ```
 
-Start a Python service (each one has its own `requirements.txt`, there is no shared virtual
-environment):
+Start a Python service. Each one has its own `requirements.txt`, but in practice they all run
+from the single virtual environment at the root, `venv/`, which holds every dependency:
 
 ```bash
 cd services/<name>
@@ -139,6 +156,7 @@ tests, and they cover the pure functions only:
 ```bash
 cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
 cd services/cortex && cargo test        # cortex (also io_oreilles)
+cd services/terminal && ../../venv/bin/python -m pytest tests/   # terminal
 ```
 
 ### Key environment variables

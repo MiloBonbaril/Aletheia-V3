@@ -294,7 +294,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("🚀 Initializing Cortex Hub Runtime (Chaos Optimized)...");
 
     // 2. NATS Connection (Résilience implicite via loop interne)
-    let nats_client = async_nats::connect("nats://localhost:4222").await?;
+    let nats_client = async_nats::ConnectOptions::new()
+        .name("cortex")
+        .connect("nats://localhost:4222")
+        .await?;
     info!("✅ Cortex connected to the NATS nervous system.");
 
     // 3. Backpressure & Rate Limiting (MPSC channel lock-free borné)

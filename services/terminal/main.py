@@ -1,0 +1,293 @@
+"""The terminal daemon: it owns the services and it serves the console.
+
+Start it from this directory:
+
+    ../../venv/bin/python main.py
+
+Then open http://127.0.0.1:7420.
+
+The daemon listens on the loopback interface only. It runs arbitrary commands
+from `services.toml`, thus it must never be reachable from the network.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import signal
+import time
+from pathlib import Path
+
+import aiohttp
+from aiohttp import web
+from aiohttp.web_runner import GracefulExit
+
+from metrics import BusMonitor, Sampler
+from supervisor import Manifest, Supervisor
+
+VERSION = "0.1.0"
+HOST, PORT = "127.0.0.1", 7420
+SAMPLE_INTERVAL = 2.0
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+WEB = HERE / "web"
+
+
+class Daemon:
+    def __init__(self) -> None:
+        self.manifest = Manifest.load(HERE / "services.toml", ROOT)
+        self.supervisor = Supervisor(self.manifest, self._on_log)
+        self.subscribers: set[asyncio.Queue] = set()
+        self.session: aiohttp.ClientSession | None = None
+        self.bus = BusMonitor(lambda: self.session)
+        self.sampler = Sampler(self.supervisor, self.bus, SAMPLE_INTERVAL)
+        self.started_at = time.time()
+
+    # ---------- broadcast ----------
+
+    def _on_log(self, service_name: str, line: dict) -> None:
+        self._broadcast({"type": "log", "service": service_name, "line": line})
+
+    def _broadcast(self, payload: dict) -> None:
+        message = json.dumps(payload)
+        for queue in list(self.subscribers):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                # A slow browser must never block the supervisor. It re-syncs on
+                # the next state snapshot.
+                pass
+
+    # ---------- snapshot ----------
+
+    def snapshot(self) -> dict:
+        services = []
+        for name in self.supervisor.order:
+            service = self.supervisor.get(name)
+            entry = service.entry
+            services.append(
+                {
+                    "name": name,
+                    "group": entry.group,
+                    "kind": entry.kind,
+                    "status": service.status,
+                    "pid": service.pid,
+                    "uptime": service.uptime,
+                    "cpu": service.cpu,
+                    "rss": service.rss,
+                    "vram": service.vram,
+                    "restarts": service.restarts,
+                    "exit_code": service.exit_code,
+                    "depends_on": entry.depends_on,
+                    "note": entry.note,
+                    "can_rebuild": bool(entry.rebuild),
+                    "stale": service.is_stale(),
+                    "history": list(service.history),
+                }
+            )
+        return {
+            "type": "state",
+            "daemon": {"version": VERSION, "uptime": time.time() - self.started_at},
+            "host": self.sampler.host,
+            "bus": self.bus.state,
+            "profiles": self.manifest.profiles,
+            "services": services,
+        }
+
+    # ---------- loops ----------
+
+    async def sample_loop(self) -> None:
+        while True:
+            try:
+                await self.sampler.tick()
+                self._broadcast(self.snapshot())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # a sampling failure must not stop the daemon
+                print(f"[terminal] sampling error: {exc!r}")
+            await asyncio.sleep(SAMPLE_INTERVAL)
+
+
+# ---------- routes ----------
+
+routes = web.RouteTableDef()
+
+
+def daemon(request: web.Request) -> Daemon:
+    return request.app["daemon"]
+
+
+@routes.get("/")
+async def index(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB / "index.html")
+
+
+@routes.get("/api/state")
+async def api_state(request: web.Request) -> web.Response:
+    return web.json_response(daemon(request).snapshot())
+
+
+@routes.get("/api/services/{name}/logs")
+async def api_logs(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    try:
+        service = daemon(request).supervisor.get(name)
+    except KeyError:
+        raise web.HTTPNotFound(text=f"service inconnu : {name}")
+    return web.json_response({"service": name, "lines": list(service.logs)})
+
+
+@routes.get("/api/stream")
+async def api_stream(request: web.Request) -> web.StreamResponse:
+    app_daemon = daemon(request)
+    response = web.StreamResponse(
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
+    await response.prepare(request)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=2000)
+    app_daemon.subscribers.add(queue)
+    try:
+        await response.write(b": ok\n\n")
+        await response.write(f"data: {json.dumps(app_daemon.snapshot())}\n\n".encode())
+        while True:
+            try:
+                message = await asyncio.wait_for(queue.get(), 20.0)
+            except asyncio.TimeoutError:
+                await response.write(b": keepalive\n\n")
+                continue
+            await response.write(f"data: {message}\n\n".encode())
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    finally:
+        app_daemon.subscribers.discard(queue)
+    return response
+
+
+@routes.post("/api/services/{name}/{action}")
+async def api_service_action(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    action = request.match_info["action"]
+    app_daemon = daemon(request)
+    try:
+        service = app_daemon.supervisor.get(name)
+    except KeyError:
+        raise web.HTTPNotFound(text=f"service inconnu : {name}")
+
+    if action == "start":
+        asyncio.create_task(app_daemon.supervisor.start_sequence([name]))
+    elif action == "stop":
+        asyncio.create_task(service.stop())
+    elif action == "restart":
+        asyncio.create_task(service.restart())
+    elif action == "rebuild":
+        if not service.entry.rebuild:
+            raise web.HTTPBadRequest(text=f"{name} n'a pas de commande de compilation")
+        asyncio.create_task(service.rebuild())
+    elif action == "clear":
+        service.clear_logs()
+    else:
+        raise web.HTTPBadRequest(text=f"action inconnue : {action}")
+    return web.json_response({"ok": True})
+
+
+@routes.post("/api/profiles/{name}/{action}")
+async def api_profile_action(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    action = request.match_info["action"]
+    app_daemon = daemon(request)
+    if name == "all":
+        members = list(app_daemon.supervisor.order)
+    else:
+        members = app_daemon.manifest.profiles.get(name)
+        if members is None:
+            raise web.HTTPNotFound(text=f"profil inconnu : {name}")
+    if action == "start":
+        asyncio.create_task(app_daemon.supervisor.start_sequence(members))
+    elif action == "stop":
+        asyncio.create_task(app_daemon.supervisor.stop_sequence(members))
+    else:
+        raise web.HTTPBadRequest(text=f"action inconnue : {action}")
+    return web.json_response({"ok": True, "services": members})
+
+
+# ---------- wiring ----------
+
+
+async def on_startup(app: web.Application) -> None:
+    app_daemon: Daemon = app["daemon"]
+    app_daemon.session = aiohttp.ClientSession()
+    app["sampler_task"] = asyncio.create_task(app_daemon.sample_loop())
+
+
+async def on_cleanup(app: web.Application) -> None:
+    """Stop every service. A dead daemon must leave no orphan and no busy GPU."""
+    app_daemon: Daemon = app["daemon"]
+    task = app.get("sampler_task")
+    if task:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    print("[terminal] arrêt des services…", flush=True)
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(
+            app_daemon.supervisor.stop_sequence(list(app_daemon.supervisor.order)), 60.0
+        )
+    app_daemon.supervisor.kill_all_now()
+    if app_daemon.session:
+        await app_daemon.session.close()
+    print("[terminal] arrêté.", flush=True)
+
+
+def build_app() -> web.Application:
+    app = web.Application()
+    app["daemon"] = Daemon()
+    app.add_routes(routes)
+    app.router.add_static("/web/", WEB)
+    app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_cleanup)
+    return app
+
+
+async def serve() -> None:
+    """Drive the runner directly.
+
+    `web.run_app` installs no SIGTERM handler in aiohttp 3.14, thus a SIGTERM
+    left the daemon alive and every service orphaned. These explicit lines are
+    more reliable than the signal plumbing of the framework.
+    """
+    app = build_app()
+    # shutdown_timeout: cleanup() waits for the open connections before it runs
+    # on_cleanup, and the SSE stream of the console never closes on its own.
+    # Waiting the default 60 s would delay the shutdown of every service.
+    runner = web.AppRunner(app, handle_signals=False, shutdown_timeout=1.0)
+    await runner.setup()
+    await web.TCPSite(runner, HOST, PORT).start()
+    print(f"[terminal] daemon {VERSION} · http://{HOST}:{PORT}", flush=True)
+    print(f"[terminal] {len(app['daemon'].supervisor.order)} services au manifeste", flush=True)
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+    try:
+        await stop.wait()
+    finally:
+        await runner.cleanup()  # this runs on_cleanup
+
+
+def main() -> None:
+    try:
+        asyncio.run(serve())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

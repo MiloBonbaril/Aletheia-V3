@@ -7,7 +7,7 @@ import os
 async def main():
     print("⌨️ Démarrage du service I/O Text...")
     try:
-        nc = await nats.connect("nats://localhost:4222")
+        nc = await nats.connect("nats://localhost:4222", name="io_text")
         print("✅ Connecté au système nerveux (NATS).")
     except Exception as e:
         print(f"❌ Erreur de connexion à NATS: {e}")

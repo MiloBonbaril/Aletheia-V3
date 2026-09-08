@@ -32,7 +32,7 @@ class Presence(commands.Cog):
 
     async def setup_nats(self):
         try:
-            self.nc = await nats.connect("nats://localhost:4222")
+            self.nc = await nats.connect("nats://localhost:4222", name="io_discord")
             self.logger.info("Connected to NATS.")
         except Exception as e:
             self.logger.error(f"Failed to connect to NATS: {e}")

@@ -218,7 +218,10 @@ async fn main() -> Result<()> {
 
     // 1. Setup NATS connection
     let nats_url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_string());
-    let client = async_nats::connect(&nats_url).await.context("Failed to connect to NATS")?;
+    let client = async_nats::ConnectOptions::new()
+        .name("io_oreilles")
+        .connect(&nats_url)
+        .await.context("Failed to connect to NATS")?;
     info!("Connected to NATS");
 
     // --discord disables local mic capture for this run in favour of per-speaker

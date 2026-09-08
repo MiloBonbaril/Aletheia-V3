@@ -170,7 +170,7 @@ async def main():
     global nc
     logger.info("🧠 En attente de connexion à NATS...")
     try:
-        nc = await nats.connect("nats://localhost:4222")
+        nc = await nats.connect("nats://localhost:4222", name="lobe_frontal")
     except Exception as e:
         logger.error(f"Échec NATS: {e}")
         return

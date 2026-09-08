@@ -1,0 +1,172 @@
+# Manifest of the terminal daemon. This file is the only source of truth for the
+# services that the daemon starts, stops and monitors.
+#
+# The order of the [[service]] blocks is the start order. "Start all" follows it.
+#
+# Fields:
+#   name        the identity of the service, unique
+#   group       the group in the sidebar of the console
+#   kind        "process" (a child of the daemon) or "docker" (a compose stack)
+#   cwd         the working directory, relative to the root of the repository
+#   cmd         the command line, as a list of arguments (kind = "process" only).
+#               `{python}` becomes the interpreter of the venv at the repository root.
+#   log_file    an optional log file to read instead of the output of the process
+#   rebuild     an optional command that rebuilds the service
+#   stale_src   an optional source directory. The console shows a "stale" badge
+#               when a file in it is newer than the first item of cmd.
+#   depends_on  documentation only. The daemon does not apply it.
+#   note        a free remark that the console shows on the card
+
+[[service]]
+name = "nats"
+group = "Infra"
+kind = "docker"
+cwd = "."
+depends_on = []
+
+[[service]]
+name = "datastores"
+group = "Infra"
+kind = "docker"
+cwd = "services/hippocampe"
+depends_on = []
+note = "PostgreSQL and Qdrant"
+
+[[service]]
+name = "llama-server"
+group = "Cognition"
+kind = "process"
+cwd = "."
+depends_on = []
+ready_tcp = "127.0.0.1:8080"
+note = "Gemma-4 12B QAT with an MTP draft model."
+cmd = [
+  "/home/milo/.local/bin/llama-server",
+  "-m", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+  "--model-draft", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/mtp-gemma-4-12B-it.gguf",
+  "--mmproj", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/mmproj-BF16.gguf",
+  "--spec-type", "draft-mtp",
+  "--spec-draft-n-max", "4",
+  "-c", "15000",
+  "-ctk", "q8_0",
+  "-ctv", "q8_0",
+  "-ngl", "999",
+  "--host", "127.0.0.1",
+  "--port", "8080",
+  "-fa", "on",
+  "--parallel", "1",
+  "-b", "2048",
+  "-ub", "1024",
+  "--temp", "1",
+  "--top_p", "0.95",
+  "--top_k", "64",
+  "--repeat_penalty", "1.0",
+  "--chat-template-file", "/mnt/forge/ai/models/Gemma-4/MTP-QAT-12B/chat_template.jinja",
+  "-ngld", "999",
+  "--jinja",
+]
+
+[[service]]
+name = "cortex"
+group = "Cognition"
+kind = "process"
+cwd = "services/cortex"
+cmd = ["target/release/cortex"]
+rebuild = ["cargo", "build", "--release"]
+stale_src = "src"
+depends_on = ["nats"]
+
+[[service]]
+name = "lobe_frontal"
+group = "Cognition"
+kind = "process"
+cwd = "services/lobe_frontal"
+cmd = ["{python}", "main.py"]
+log_file = "lobe_frontal.log"
+depends_on = ["nats", "llama-server", "hippocampe"]
+note = "Textual TUI. The console reads the log file, not the screen."
+
+[[service]]
+name = "hippocampe"
+group = "Cognition"
+kind = "process"
+cwd = "services/hippocampe"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats", "datastores"]
+
+[[service]]
+name = "limbic"
+group = "Cognition"
+kind = "process"
+cwd = "services/limbic"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats"]
+
+[[service]]
+name = "io_oreilles"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_oreilles"
+cmd = ["target/release/io_oreilles"]
+rebuild = ["cargo", "build", "--release", "--features", "cuda"]
+stale_src = "src"
+depends_on = ["nats"]
+note = "Local microphone."
+
+[[service]]
+name = "io_oreilles_discord"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_oreilles"
+cmd = ["target/release/io_oreilles", "--discord"]
+rebuild = ["cargo", "build", "--release", "--features", "cuda"]
+stale_src = "src"
+depends_on = ["nats", "io_discord"]
+note = "Discord audio. Do not start it with io_oreilles."
+
+[[service]]
+name = "io_voix"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_voix"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats"]
+
+[[service]]
+name = "io_discord"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_discord"
+cmd = ["{python}", "bot.py"]
+depends_on = ["nats"]
+
+[[service]]
+name = "io_text"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_text"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats"]
+note = "An interactive editor. Start it in your own terminal, not here."
+
+[[service]]
+name = "benchmark"
+group = "Outillage"
+kind = "process"
+cwd = "services/benchmark"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats"]
+
+# Profiles: named subsets. The daemon starts them in the order of this file.
+
+[profile.complet]
+services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_oreilles", "io_voix"]
+
+[profile."sans-vocal"]
+services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal"]
+
+[profile.discord]
+services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_discord", "io_oreilles_discord", "io_voix"]
+
+[profile.infra]
+services = ["nats", "datastores", "llama-server"]
