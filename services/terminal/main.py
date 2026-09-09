@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import signal
 import time
 from pathlib import Path
@@ -214,6 +215,84 @@ async def api_profile_action(request: web.Request) -> web.Response:
     else:
         raise web.HTTPBadRequest(text=f"action inconnue : {action}")
     return web.json_response({"ok": True, "services": members})
+
+
+# ---------- config files ----------
+
+
+def _stamp(path: Path) -> str:
+    """The version of a file on disk, as a string.
+
+    st_mtime_ns is above 2^53, thus a JSON number would lose its last digits in
+    the browser. The console only compares it, never reads it.
+    """
+    try:
+        return str(path.stat().st_mtime_ns)
+    except FileNotFoundError:
+        return ""
+
+
+def _config_file(request: web.Request):
+    name = request.match_info["name"]
+    for entry in daemon(request).manifest.config_files:
+        if entry.name == name:
+            return entry
+    raise web.HTTPNotFound(text=f"fichier inconnu : {name}")
+
+
+@routes.get("/api/config")
+async def api_config_list(request: web.Request) -> web.Response:
+    files = [
+        {
+            "name": c.name,
+            "path": str(c.path.relative_to(ROOT)),
+            "service": c.service,
+            "note": c.note,
+            "size": c.path.stat().st_size if c.path.exists() else 0,
+            "mtime": _stamp(c.path),
+        }
+        for c in daemon(request).manifest.config_files
+    ]
+    return web.json_response({"files": files})
+
+
+@routes.get("/api/config/{name}")
+async def api_config_read(request: web.Request) -> web.Response:
+    entry = _config_file(request)
+    text = entry.path.read_text(encoding="utf-8") if entry.path.exists() else ""
+    return web.json_response({"name": entry.name, "text": text, "mtime": _stamp(entry.path)})
+
+
+@routes.put("/api/config/{name}")
+async def api_config_write(request: web.Request) -> web.Response:
+    entry = _config_file(request)
+    body = await request.json()
+    text = body.get("text")
+    if not isinstance(text, str):
+        raise web.HTTPBadRequest(text="le corps doit contenir un champ texte")
+
+    # The file also lives in an editor and in git. Refuse to overwrite a version
+    # that the browser never saw, and give it back, or an edit disappears in silence.
+    current = _stamp(entry.path)
+    if body.get("mtime") != current:
+        return web.json_response(
+            {
+                "error": "conflit",
+                "mtime": current,
+                "text": entry.path.read_text(encoding="utf-8") if entry.path.exists() else "",
+            },
+            status=409,
+        )
+
+    if entry.path.exists():
+        backup = entry.path.with_name(entry.path.name + ".bak")
+        backup.write_bytes(entry.path.read_bytes())
+    # Write beside the file and rename: a daemon that dies in the middle of this
+    # leaves the old file whole, never a truncated persona.
+    temp = entry.path.with_name(entry.path.name + ".tmp")
+    temp.write_text(text, encoding="utf-8")
+    os.replace(temp, entry.path)
+    return web.json_response({"ok": True, "mtime": _stamp(entry.path), "service": entry.service})
 
 
 # ---------- wiring ----------

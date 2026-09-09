@@ -86,3 +86,43 @@ def test_manifest_rejects_a_profile_with_an_unknown_service(tmp_path):
     )
     with pytest.raises(ValueError, match="unknown services"):
         Manifest.load(bad, ROOT)
+
+
+def test_config_files_point_at_files_that_exist():
+    manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
+    names = {c.name for c in manifest.config_files}
+    assert {"PERSONA.md", "MEMORY.md", "USER.md"} <= names
+    services = {e.name for e in manifest.entries}
+    for entry in manifest.config_files:
+        assert entry.path.is_file(), f"{entry.name} ne pointe sur aucun fichier"
+        # The console offers a restart button with this name.
+        assert entry.service in services
+
+
+def test_manifest_rejects_a_config_file_outside_the_repository(tmp_path):
+    bad = tmp_path / "escape.toml"
+    bad.write_text(
+        '[[config_file]]\nname = "passwd"\npath = "../../../../etc/passwd"\n'
+    )
+    with pytest.raises(ValueError, match="outside the repository"):
+        Manifest.load(bad, ROOT)
+
+
+def test_manifest_rejects_a_config_file_that_names_an_unknown_service(tmp_path):
+    bad = tmp_path / "ghost.toml"
+    bad.write_text(
+        '[[service]]\nname = "a"\ncwd = "."\n\n'
+        '[[config_file]]\nname = "x"\npath = "README.md"\nservice = "fantome"\n'
+    )
+    with pytest.raises(ValueError, match="unknown service"):
+        Manifest.load(bad, ROOT)
+
+
+def test_manifest_rejects_two_config_files_with_the_same_name(tmp_path):
+    bad = tmp_path / "dup.toml"
+    bad.write_text(
+        '[[config_file]]\nname = "x"\npath = "README.md"\n'
+        '[[config_file]]\nname = "x"\npath = "CONTEXT.md"\n'
+    )
+    with pytest.raises(ValueError, match="same name"):
+        Manifest.load(bad, ROOT)

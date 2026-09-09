@@ -288,6 +288,130 @@ function LogPanel({ s, lines, onClose }) {
     </aside>`;
 }
 
+// ---------- config tab ----------
+
+function ConfigTab() {
+  const [files, setFiles] = useState([]);
+  const [name, setName] = useState(null);
+  const [saved, setSaved] = useState({ text: "", mtime: "" });
+  const [draft, setDraft] = useState("");
+  const [note, setNote] = useState(null);
+  const dirty = draft !== saved.text;
+  const file = files.find((f) => f.name === name);
+
+  const load = useCallback((n) => (
+    fetch(`/api/config/${encodeURIComponent(n)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setName(d.name);
+        setSaved({ text: d.text, mtime: d.mtime });
+        setDraft(d.text);
+        setNote(null);
+      })
+      .catch(() => setNote({ kind: "err", text: "lecture impossible" }))
+  ), []);
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d) => { setFiles(d.files); if (d.files.length) load(d.files[0].name); })
+      .catch(() => setNote({ kind: "err", text: "le daemon ne répond pas" }));
+  }, [load]);
+
+  // The same file also lives in an editor and in git. `mtime` is the version the
+  // browser read; the daemon refuses to write over a version it never saw.
+  const save = async (mtime) => {
+    const response = await fetch(`/api/config/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: draft, mtime: mtime ?? saved.mtime }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 409) {
+      setNote({ kind: "warn", text: "le fichier a changé sur le disque depuis l'ouverture", conflict: body });
+      return;
+    }
+    if (!response.ok) {
+      setNote({ kind: "err", text: "écriture refusée par le daemon" });
+      return;
+    }
+    setSaved({ text: draft, mtime: body.mtime });
+    setNote({ kind: "ok", text: "enregistré", service: body.service });
+  };
+
+  const open = (n) => {
+    if (n === name) return;
+    if (dirty && !window.confirm(`${name} a des modifications non enregistrées. Les abandonner ?`)) return;
+    load(n);
+  };
+
+  const onKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save(); }
+  };
+
+  return html`
+    <div class="body">
+      <aside class="sidebar">
+        <div class="scroll">
+          <section>
+            <span class="label">Fichiers</span>
+            ${files.map((f) => html`
+              <button key=${f.name} class=${`grp ${name === f.name ? "active" : ""}`}
+                      onClick=${() => open(f.name)}>
+                <span>${f.name}</span>
+                <span class="count">${name === f.name && dirty ? "●" : ""}</span>
+              </button>`)}
+          </section>
+        </div>
+      </aside>
+
+      <main class="main cfg">
+        <header>
+          <div>
+            <h1>${name || "Configuration"}</h1>
+            <p>${file ? (file.note || file.path) : "les fichiers déclarés dans services.toml"}</p>
+          </div>
+          <span class="spacer"></span>
+          <div class="toolbar">
+            ${file && html`<span class="path">${file.path}</span>`}
+            <button onClick=${() => load(name)} disabled=${!name}>Recharger</button>
+            <button class="primary" onClick=${() => save()} disabled=${!dirty}>
+              Enregistrer${dirty ? " ·" : ""}
+            </button>
+          </div>
+        </header>
+
+        ${!name
+          ? html`<p class="empty">services.toml ne déclare aucun bloc [[config_file]].</p>`
+          : html`
+            <textarea spellcheck=${false} value=${draft} onKeyDown=${onKeyDown}
+                      onInput=${(e) => setDraft(e.target.value)}></textarea>
+            <div class=${`status ${note ? note.kind : ""}`}>
+              ${note
+                ? html`
+                    <span>${note.text}</span>
+                    ${note.conflict && html`
+                      <button onClick=${() => { setDraft(note.conflict.text); setSaved({ text: note.conflict.text, mtime: note.conflict.mtime }); setNote(null); }}>
+                        Prendre la version du disque
+                      </button>
+                      <button onClick=${() => save(note.conflict.mtime)}>Écraser avec la mienne</button>`}
+                    ${note.service && html`
+                      <button class="primary" onClick=${() => { post(`/api/services/${note.service}/restart`); setNote({ kind: "ok", text: `redémarrage de ${note.service} demandé` }); }}>
+                        Redémarrer ${note.service}
+                      </button>`}`
+                : html`<span>${dirty ? "modifié · Ctrl+S pour enregistrer" : "à jour"}</span>`}
+              <span class="spacer"></span>
+              <span class="count">${draft.length} caractères</span>
+            </div>
+            ${file && file.service && html`
+              <p class="hint">
+                <b>${file.service}</b> lit ce fichier une seule fois, à son démarrage.
+                Une modification s'applique au redémarrage du service.
+              </p>`}`}
+      </main>
+    </div>`;
+}
+
 // ---------- app ----------
 
 function App() {
@@ -297,6 +421,7 @@ function App() {
   const [group, setGroup] = useState("*");
   const [filter, setFilter] = useState("");
   const [view, setView] = useState("grid");
+  const [tab, setTab] = useState("services");
   const [online, setOnline] = useState(false);
 
   useEffect(() => {
@@ -353,7 +478,10 @@ function App() {
       <div class="topbar">
         <div class="brand"><span class="mark">A</span>Aletheia · terminal</div>
         <nav class="tabs">
-          <button class="tab active">Services</button>
+          <button class=${`tab ${tab === "services" ? "active" : ""}`}
+                  onClick=${() => setTab("services")}>Services</button>
+          <button class=${`tab ${tab === "config" ? "active" : ""}`}
+                  onClick=${() => setTab("config")}>Config</button>
         </nav>
         <span class="spacer"></span>
         <span class="badge-daemon">
@@ -362,6 +490,7 @@ function App() {
         </span>
       </div>
 
+      ${tab === "config" ? html`<${ConfigTab} />` : html`
       <div class="body">
         <${Sidebar} services=${all} profiles=${snap.profiles} host=${snap.host}
                     group=${group} setGroup=${setGroup} />
@@ -414,7 +543,7 @@ function App() {
         ${detail && html`
           <${LogPanel} s=${detail} lines=${logs[detail.name] || []}
                        onClose=${() => setSelected(null)} />`}
-      </div>
+      </div>`}
     </div>`;
 }
 

@@ -11,8 +11,8 @@ The service has two parts:
 
 - The **daemon** (`main.py`) owns the processes. It starts each service in its own process group,
   it reads the output, and it samples the resources. It serves an HTTP API on `127.0.0.1:7420`.
-- The **console** (`web/`) is the web interface that the daemon serves. It shows one tab,
-  `Services`.
+- The **console** (`web/`) is the web interface that the daemon serves. It shows two tabs,
+  `Services` and `Config`.
 
 Read `docs/adr/0003-terminal-superviseur-de-processus-local.md` for the reasons of the design.
 
@@ -61,6 +61,15 @@ order.
 | `depends_on` | Documentation only. The daemon does not apply it.                            |
 | `note`       | A remark that the console shows on the card.                                 |
 
+A `[[config_file]]` block declares a text file that the `Config` tab edits.
+
+| Field     | Function                                                                       |
+| --------- | ------------------------------------------------------------------------------ |
+| `name`    | The identity of the file in the console. It must be unique.                    |
+| `path`    | The file, relative to the root of the repository. It must stay in it.          |
+| `service` | The service to restart, because the edit applies at the next start only.       |
+| `note`    | A remark that the console shows under the title.                               |
+
 A `[profile.<name>]` block gives a named subset of services. The console starts a profile in the
 order of the file.
 
@@ -82,6 +91,28 @@ The log panel has a resize handle on its left edge. Drag it, or give it the focu
 and right arrow keys. A double click puts it back to 420 px. The browser keeps the width in
 `localStorage`, thus it stays across a reload. The width has a floor of 320 px and a ceiling that
 leaves 620 px to the sidebar and the main column, or the toolbar of the main column overflows.
+
+## ✏️ The Config tab
+
+The tab edits the three Markdown files of the prompt of `lobe_frontal`: `PERSONA.md` (the
+character), `MEMORY.md` (the permanent knowledge) and `USER.md` (who speaks to her). `Ctrl+S`
+writes the file.
+
+`lobe_frontal` reads these files one time, in the constructor of `PromptBuilder`. **An edit applies
+at the next start of the service.** The console shows a `Restart lobe_frontal` button after each
+write, because the daemon is also the supervisor.
+
+Three guards protect the files:
+
+- The daemon writes no path that a `[[config_file]]` block does not name. The API takes a `name`.
+  It never takes a path from the browser.
+- The browser sends the version of the file that it read. The daemon refuses to write over a newer
+  version, and it gives the version on disk back. Thus an edit that you make in an editor at the
+  same time does not disappear in silence. The console then offers the two files, and you choose.
+- The daemon copies the file to `<name>.bak` before each write, and it writes through a temporary
+  file. Thus a daemon that dies in the middle of a write leaves the old file whole.
+
+`*.bak` is in `.gitignore`.
 
 ## 🖥️ The services that are terminal applications
 
@@ -126,6 +157,6 @@ cd services/terminal
 
 ## 🔮 Not in V0.1
 
-The console has a tab bar with one tab. The message rate, the end-to-end latency and the p95 stay
+The message rate, the end-to-end latency and the p95 stay
 the property of `services/benchmark`, which measures them correctly. A browser shell, the launch of
 `io_visage` and `io_yeux`, and the persistence of the logs are not present.

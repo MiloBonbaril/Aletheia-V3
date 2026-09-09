@@ -89,9 +89,24 @@ class Entry:
 
 
 @dataclass
+class ConfigFile:
+    """A text file that the console can edit.
+
+    The daemon writes no path that this list does not name, thus the API takes a
+    `name` and never a path from the browser.
+    """
+
+    name: str
+    path: Path
+    service: str | None = None  # the service to restart so that the edit applies
+    note: str | None = None
+
+
+@dataclass
 class Manifest:
     entries: list[Entry]
     profiles: dict[str, list[str]]
+    config_files: list[ConfigFile] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path, root: Path) -> "Manifest":
@@ -129,7 +144,23 @@ class Manifest:
             unknown = set(members) - set(names)
             if unknown:
                 raise ValueError(f"profile {pname} names unknown services: {sorted(unknown)}")
-        return cls(entries, profiles)
+
+        inside = root.resolve()
+        config_files = []
+        for c in raw.get("config_file", []):
+            target = (root / c["path"]).resolve()
+            if not target.is_relative_to(inside):
+                raise ValueError(f"config file {c['name']} is outside the repository")
+            service = c.get("service")
+            if service and service not in names:
+                raise ValueError(f"config file {c['name']} names an unknown service: {service}")
+            config_files.append(
+                ConfigFile(name=c["name"], path=target, service=service, note=c.get("note"))
+            )
+        labels = [c.name for c in config_files]
+        if len(labels) != len(set(labels)):
+            raise ValueError("the manifest has two config files with the same name")
+        return cls(entries, profiles, config_files)
 
 
 class Service:

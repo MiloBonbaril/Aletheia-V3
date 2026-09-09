@@ -40,7 +40,9 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `stay_silent`, `set_mood`). It answers `lobe.topic.generate` for the proactivity of `limbic`. An
   embedded Textual TUI (`tui.py`) shows the prompt, the output and the tool activity. The persona,
   the knowledge and the user data are Markdown files in `config/` (`PERSONA.md`, `MEMORY.md`,
-  `USER.md`). An edit changes the behavior with no code change and no restart.
+  `USER.md`). An edit changes the behavior with no code change. `PromptBuilder` reads the three
+  files in its constructor, thus the edit applies at the next start of the service. The `Config`
+  tab of `services/terminal` edits them and restarts the service.
   - The inference goes to a local llama.cpp server through `OpenAI/interface.py`. `main.py` selects
     this interface at import time. The `Groq/` and `Mistral/` interfaces and the `INTERFACE`
     environment variable are not connected. This is a decision, not a defect: see
@@ -85,10 +87,11 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   the processes of the other services and serves a **console** (Preact, no build step) on
   `127.0.0.1:7420`. It starts, stops, rebuilds and monitors each service, and it keeps a buffer of
   2000 log lines for each one in memory. `services.toml` is the manifest: it declares the command,
-  the group, the start order and the named profiles. The daemon kills every service when it stops,
-  and it never restarts a crashed one. It reads the bus through the monitoring endpoint of NATS
-  (`/varz`, `/connz`), never through a subscription, thus no payload passes through it. See
-  `docs/adr/0003-terminal-superviseur-de-processus-local.md`.
+  the group, the start order, the named profiles and the text files that the `Config` tab edits.
+  That tab writes the three prompt files of `lobe_frontal` and restarts it. The daemon kills every
+  service when it stops, and it never restarts a crashed one. It reads the bus through the
+  monitoring endpoint of NATS (`/varz`, `/connz`), never through a subscription, thus no payload
+  passes through it. See `docs/adr/0003-terminal-superviseur-de-processus-local.md`.
 - **io_yeux**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
   two contain a README file only. There is no source code.
 
