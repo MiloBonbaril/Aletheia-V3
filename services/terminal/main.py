@@ -247,6 +247,7 @@ async def api_config_list(request: web.Request) -> web.Response:
             "name": c.name,
             "path": str(c.path.relative_to(ROOT)),
             "service": c.service,
+            "hot_reload": c.hot_reload,
             "note": c.note,
             "size": c.path.stat().st_size if c.path.exists() else 0,
             "mtime": _stamp(c.path),
@@ -292,7 +293,14 @@ async def api_config_write(request: web.Request) -> web.Response:
     temp = entry.path.with_name(entry.path.name + ".tmp")
     temp.write_text(text, encoding="utf-8")
     os.replace(temp, entry.path)
-    return web.json_response({"ok": True, "mtime": _stamp(entry.path), "service": entry.service})
+    return web.json_response(
+        {
+            "ok": True,
+            "mtime": _stamp(entry.path),
+            "service": entry.service if not entry.hot_reload else None,
+            "applied": entry.hot_reload,
+        }
+    )
 
 
 # ---------- wiring ----------

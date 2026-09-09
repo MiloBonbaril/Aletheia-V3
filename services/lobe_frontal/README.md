@@ -80,7 +80,9 @@ into the system prompt:
 - **`USER.md`** — the data about the users and their relation with the AI.
 
 An edit of these files changes the behavior at the next message. You do not have to restart the
-service.
+service. `PromptBuilder` compares the date of each file before each prompt, and it reads the file
+again only when the date changes. The `Config` tab of `services/terminal` edits the three files
+from the browser.
 
 ## 📊 Model bench (`eval/`)
 

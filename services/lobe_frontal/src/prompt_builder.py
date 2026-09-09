@@ -12,23 +12,49 @@ class PromptBuilder:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             config_dir = os.path.join(base_dir, "config")
 
-        self._persona = self._read_file(config_dir, "PERSONA.md")
-        self._core_memory = self._read_file(config_dir, "MEMORY.md")
-        self._users = self._read_file(config_dir, "USER.md")
-        # Contrairement aux attributs ci-dessus (lus une fois à l'init), le mood est mis à
-        # jour en continu par main.py au fil des messages limbic.mood.update reçus.
+        self._config_dir = config_dir
+        # filename -> (mtime_ns, contenu). Voir _read_file: relu quand le fichier change.
+        self._cache: dict[str, tuple[int, str]] = {}
+        for filename in ("PERSONA.md", "MEMORY.md", "USER.md"):
+            self._read_file(filename)
+        # Le mood ne vient pas d'un fichier: main.py le met à jour au fil des
+        # messages limbic.mood.update reçus.
         self.mood: dict | None = None
         logger.info(f"✅ PromptBuilder initialisé (config: {config_dir})")
 
-    @staticmethod
-    def _read_file(directory: str, filename: str) -> str:
-        path = os.path.join(directory, filename)
+    def _read_file(self, filename: str) -> str:
+        """Rend le contenu du fichier, relu seulement s'il a changé sur le disque.
+
+        Trois stat() par prompt, soit quelques microsecondes face à la cible de
+        200 ms de TTFT. En échange, une édition de PERSONA.md / MEMORY.md /
+        USER.md s'applique à l'inférence suivante, sans redémarrer le service
+        (c'est ce que fait l'onglet Config de services/terminal).
+        """
+        path = os.path.join(self._config_dir, filename)
+        cached = self._cache.get(filename)
+        try:
+            stamp = os.stat(path).st_mtime_ns
+        except OSError:
+            if cached is None:
+                logger.warning(f"⚠️ Fichier manquant: {path}")
+                self._cache[filename] = (0, "")
+            return self._cache[filename][1]
+
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return f.read().strip()
-        except FileNotFoundError:
-            logger.warning(f"⚠️ Fichier manquant: {path}")
-            return ""
+                text = f.read().strip()
+        except OSError as exc:
+            # Garder l'ancien contenu: un prompt système amputé est pire qu'un
+            # prompt périmé d'une inférence.
+            logger.warning(f"⚠️ Lecture impossible de {path}: {exc}")
+            return cached[1] if cached is not None else ""
+
+        if cached is not None:
+            logger.info(f"♻️ {filename} rechargé ({len(text)} caractères)")
+        self._cache[filename] = (stamp, text)
+        return text
 
     @property
     def tools_schema(self) -> list[dict]:
@@ -114,8 +140,9 @@ class PromptBuilder:
 
     def build_system_prompt(self, context_summary: str = None, rag_results: str = None) -> str:
         sections = [
-            "<system>\n  <persona>", self._persona, "  </persona>\n  <core_memory>",
-            self._core_memory, "  </core_memory>\n  <users>", self._users, "  </users>",
+            "<system>\n  <persona>", self._read_file("PERSONA.md"), "  </persona>\n  <core_memory>",
+            self._read_file("MEMORY.md"), "  </core_memory>\n  <users>", self._read_file("USER.md"),
+            "  </users>",
             self._build_tools_xml()
         ]
         if self.mood:

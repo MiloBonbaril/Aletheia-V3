@@ -336,7 +336,11 @@ function ConfigTab() {
       return;
     }
     setSaved({ text: draft, mtime: body.mtime });
-    setNote({ kind: "ok", text: "enregistré", service: body.service });
+    setNote({
+      kind: "ok",
+      text: body.applied ? "enregistré · appliqué au prochain prompt" : "enregistré",
+      service: body.service,  // absent quand le service suit le fichier tout seul
+    });
   };
 
   const open = (n) => {
@@ -405,8 +409,11 @@ function ConfigTab() {
             </div>
             ${file && file.service && html`
               <p class="hint">
-                <b>${file.service}</b> lit ce fichier une seule fois, à son démarrage.
-                Une modification s'applique au redémarrage du service.
+                ${file.hot_reload
+                  ? html`<b>${file.service}</b> relit ce fichier quand il change. Une modification
+                         s'applique au prompt suivant, sans redémarrage.`
+                  : html`<b>${file.service}</b> lit ce fichier à son démarrage. Une modification
+                         s'applique au redémarrage du service.`}
               </p>`}`}
       </main>
     </div>`;

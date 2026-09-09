@@ -195,23 +195,27 @@ services = ["nats", "datastores", "llama-server"]
 
 # Text files that the Config tab of the console edits. The daemon writes no other
 # path: the API names a file by `name`, never by a path from the browser.
-#   service  the service to restart, because the edit applies at the next start
-#            only. PromptBuilder reads these three files in its __init__.
+#   service     the service that reads the file
+#   hot_reload  true when the service follows the file on disk. The console then
+#               offers no restart. Default false: a restart is the safe answer.
 
 [[config_file]]
 name = "PERSONA.md"
 path = "services/lobe_frontal/config/PERSONA.md"
 service = "lobe_frontal"
+hot_reload = true
 note = "Who Aletheia is: the character, the voice and the limits."
 
 [[config_file]]
 name = "MEMORY.md"
 path = "services/lobe_frontal/config/MEMORY.md"
 service = "lobe_frontal"
+hot_reload = true
 note = "The permanent knowledge, in the <core_memory> section of the prompt."
 
 [[config_file]]
 name = "USER.md"
 path = "services/lobe_frontal/config/USER.md"
 service = "lobe_frontal"
+hot_reload = true
 note = "Who speaks to her, in the <users> section of the prompt."

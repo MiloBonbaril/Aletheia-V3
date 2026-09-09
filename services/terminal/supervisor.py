@@ -98,7 +98,10 @@ class ConfigFile:
 
     name: str
     path: Path
-    service: str | None = None  # the service to restart so that the edit applies
+    service: str | None = None  # the service that reads the file
+    # True when the service follows the file on disk. The console then does not
+    # offer a restart. Default False: a restart is the safe answer.
+    hot_reload: bool = False
     note: str | None = None
 
 
@@ -155,7 +158,13 @@ class Manifest:
             if service and service not in names:
                 raise ValueError(f"config file {c['name']} names an unknown service: {service}")
             config_files.append(
-                ConfigFile(name=c["name"], path=target, service=service, note=c.get("note"))
+                ConfigFile(
+                    name=c["name"],
+                    path=target,
+                    service=service,
+                    hot_reload=bool(c.get("hot_reload", False)),
+                    note=c.get("note"),
+                )
             )
         labels = [c.name for c in config_files]
         if len(labels) != len(set(labels)):

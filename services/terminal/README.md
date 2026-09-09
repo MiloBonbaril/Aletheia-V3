@@ -67,7 +67,8 @@ A `[[config_file]]` block declares a text file that the `Config` tab edits.
 | --------- | ------------------------------------------------------------------------------ |
 | `name`    | The identity of the file in the console. It must be unique.                    |
 | `path`    | The file, relative to the root of the repository. It must stay in it.          |
-| `service` | The service to restart, because the edit applies at the next start only.       |
+| `service` | The service that reads the file.                                               |
+| `hot_reload` | `true` when the service follows the file. The console then offers no restart. |
 | `note`    | A remark that the console shows under the title.                               |
 
 A `[profile.<name>]` block gives a named subset of services. The console starts a profile in the
@@ -98,9 +99,13 @@ The tab edits the three Markdown files of the prompt of `lobe_frontal`: `PERSONA
 character), `MEMORY.md` (the permanent knowledge) and `USER.md` (who speaks to her). `Ctrl+S`
 writes the file.
 
-`lobe_frontal` reads these files one time, in the constructor of `PromptBuilder`. **An edit applies
-at the next start of the service.** The console shows a `Restart lobe_frontal` button after each
-write, because the daemon is also the supervisor.
+`PromptBuilder` compares the date of each file before each prompt. **An edit applies at the next
+prompt, with no restart.** The three blocks carry `hot_reload = true`, thus the console says
+"appliqué au prochain prompt" and offers no restart button.
+
+A `[[config_file]]` block without `hot_reload` gets the other message and a `Restart <service>`
+button, because the daemon is also the supervisor. `false` is the default: a restart is the answer
+that is always correct.
 
 Three guards protect the files:
 
