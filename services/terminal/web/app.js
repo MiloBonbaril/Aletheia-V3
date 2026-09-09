@@ -3,6 +3,24 @@ import {
 } from "/web/vendor/htm-preact.module.js";
 
 const LOG_CAP = 2000;
+const LOG_WIDTH_KEY = "terminal.logWidth";
+const LOG_WIDTH_DEFAULT = 420;
+const LOG_WIDTH_MIN = 320;
+// Room that the sidebar and the toolbar of the main column need. The same value
+// is the max-width of .logs in style.css: change the two together. The CSS one
+// also narrows the panel on its own when the window shrinks, thus no resize
+// listener is needed here.
+const LOG_WIDTH_GUTTER = 620;
+const readLogWidth = () => {
+  try {
+    return Number(localStorage.getItem(LOG_WIDTH_KEY)) || LOG_WIDTH_DEFAULT;
+  } catch {
+    return LOG_WIDTH_DEFAULT;  // a private window can refuse the read
+  }
+};
+const writeLogWidth = (w) => {
+  try { localStorage.setItem(LOG_WIDTH_KEY, String(w)); } catch { /* not important */ }
+};
 
 // ---------- formatting ----------
 
@@ -172,10 +190,51 @@ function Table({ services, selected, onSelect }) {
     </table>`;
 }
 
+function Grip({ width, setWidth }) {
+  const [dragging, setDragging] = useState(false);
+  const latest = useRef(width);
+  const apply = (w) => {
+    const room = Math.max(LOG_WIDTH_MIN, window.innerWidth - LOG_WIDTH_GUTTER);
+    const clamped = Math.min(room, Math.max(LOG_WIDTH_MIN, Math.round(w)));
+    latest.current = clamped;
+    setWidth(clamped);
+  };
+  const onKeyDown = (e) => {
+    const step = e.key === "ArrowLeft" ? 24 : e.key === "ArrowRight" ? -24 : 0;
+    if (!step) return;
+    e.preventDefault();
+    apply(latest.current + step);
+    writeLogWidth(latest.current);
+  };
+  return html`
+    <div class=${`grip ${dragging ? "dragging" : ""}`} role="separator" aria-orientation="vertical"
+         tabindex="0" title="Glisser pour redimensionner · double-clic pour réinitialiser"
+         onKeyDown=${onKeyDown}
+         onDblClick=${() => { apply(LOG_WIDTH_DEFAULT); writeLogWidth(LOG_WIDTH_DEFAULT); }}
+         onPointerDown=${(e) => {
+           e.preventDefault();
+           e.currentTarget.setPointerCapture(e.pointerId);
+           document.body.classList.add("resizing");
+           setDragging(true);
+         }}
+         onPointerMove=${(e) => {
+           // hasPointerCapture, not the `dragging` state: a fast drag sends its
+           // first moves before the re-render, and those moves were lost.
+           if (e.currentTarget.hasPointerCapture(e.pointerId)) apply(window.innerWidth - e.clientX);
+         }}
+         onPointerUp=${(e) => {
+           e.currentTarget.releasePointerCapture(e.pointerId);
+           document.body.classList.remove("resizing");
+           setDragging(false);
+           writeLogWidth(latest.current);
+         }}></div>`;
+}
+
 function LogPanel({ s, lines, onClose }) {
   const [follow, setFollow] = useState(true);
   const [wrap, setWrap] = useState(false);
   const [level, setLevel] = useState("all");
+  const [width, setWidth] = useState(readLogWidth);
   const box = useRef(null);
 
   const shown = useMemo(() => (
@@ -192,7 +251,8 @@ function LogPanel({ s, lines, onClose }) {
   const levelName = { all: "tout", warn: "warn+", err: "erreurs" }[level];
 
   return html`
-    <aside class="logs">
+    <aside class="logs" style=${{ width: `${width}px` }}>
+      <${Grip} width=${width} setWidth=${setWidth} />
       <header>
         <h2>
           <span class=${`dot ${s.status}`}></span>${s.name}

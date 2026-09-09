@@ -78,6 +78,11 @@ order of the file.
 - **The logs**: a buffer of 2000 lines for each service, in memory. The buffer stays across a
   restart of the service. It disappears with the daemon. Nothing goes to the disk.
 
+The log panel has a resize handle on its left edge. Drag it, or give it the focus and use the left
+and right arrow keys. A double click puts it back to 420 px. The browser keeps the width in
+`localStorage`, thus it stays across a reload. The width has a floor of 320 px and a ceiling that
+leaves 620 px to the sidebar and the main column, or the toolbar of the main column overflows.
+
 ## 🖥️ The services that are terminal applications
 
 The daemon gives a pseudo-terminal to each child, because two services need one:
