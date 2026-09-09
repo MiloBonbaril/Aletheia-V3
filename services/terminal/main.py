@@ -24,6 +24,7 @@ import aiohttp
 from aiohttp import web
 from aiohttp.web_runner import GracefulExit
 
+from chat import Chat
 from metrics import BusMonitor, Sampler
 from supervisor import Manifest, Supervisor
 
@@ -44,12 +45,18 @@ class Daemon:
         self.session: aiohttp.ClientSession | None = None
         self.bus = BusMonitor(lambda: self.session)
         self.sampler = Sampler(self.supervisor, self.bus, SAMPLE_INTERVAL)
+        self.chat = Chat(self._on_chat)
         self.started_at = time.time()
 
     # ---------- broadcast ----------
 
     def _on_log(self, service_name: str, line: dict) -> None:
         self._broadcast({"type": "log", "service": service_name, "line": line})
+
+    def _on_chat(self, message: dict) -> None:
+        # The whole message goes out at each fragment, not the difference. A
+        # browser that misses one event catches up at the next one.
+        self._broadcast({"type": "chat", "message": message})
 
     def _broadcast(self, payload: dict) -> None:
         message = json.dumps(payload)
@@ -93,6 +100,7 @@ class Daemon:
             "daemon": {"version": VERSION, "uptime": time.time() - self.started_at},
             "host": self.sampler.host,
             "bus": self.bus.state,
+            "chat": {"connected": self.chat.connected},
             "profiles": self.manifest.profiles,
             "services": services,
         }
@@ -217,6 +225,31 @@ async def api_profile_action(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "services": members})
 
 
+# ---------- chat ----------
+
+
+@routes.get("/api/chat")
+async def api_chat_read(request: web.Request) -> web.Response:
+    app_daemon = daemon(request)
+    return web.json_response(
+        {"connected": app_daemon.chat.connected, "messages": list(app_daemon.chat.messages)}
+    )
+
+
+@routes.post("/api/chat")
+async def api_chat_send(request: web.Request) -> web.Response:
+    app_daemon = daemon(request)
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise web.HTTPBadRequest(text="message vide")
+    try:
+        message = await app_daemon.chat.send(text)
+    except ConnectionError as exc:
+        raise web.HTTPServiceUnavailable(text=str(exc))
+    return web.json_response({"ok": True, "message": message})
+
+
 # ---------- config files ----------
 
 
@@ -309,6 +342,7 @@ async def api_config_write(request: web.Request) -> web.Response:
 async def on_startup(app: web.Application) -> None:
     app_daemon: Daemon = app["daemon"]
     app_daemon.session = aiohttp.ClientSession()
+    await app_daemon.chat.start()
     app["sampler_task"] = asyncio.create_task(app_daemon.sample_loop())
 
 
@@ -320,6 +354,7 @@ async def on_cleanup(app: web.Application) -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    await app_daemon.chat.close()
     print("[terminal] arrêt des services…", flush=True)
     with contextlib.suppress(Exception):
         await asyncio.wait_for(

@@ -126,3 +126,82 @@ def test_manifest_rejects_two_config_files_with_the_same_name(tmp_path):
     )
     with pytest.raises(ValueError, match="same name"):
         Manifest.load(bad, ROOT)
+
+
+# ---------- chat ----------
+
+import asyncio  # noqa: E402
+import json as _json  # noqa: E402
+
+from chat import Chat  # noqa: E402
+
+
+class _Msg:
+    """Ce que nats-py passe au rappel: un objet avec un attribut `data`."""
+
+    def __init__(self, payload: dict):
+        self.data = _json.dumps(payload).encode()
+
+
+def _feed(chat, fragments):
+    async def run():
+        for fragment in fragments:
+            await chat._on_fragment(_Msg(fragment))
+    asyncio.run(run())
+
+
+def test_les_fragments_se_recollent_en_un_seul_message():
+    # Le rappel reçoit le message en cours d'écriture, toujours le même objet.
+    # On copie le texte tout de suite, comme _broadcast() qui sérialise sur place.
+    vus = []
+    chat = Chat(lambda message: vus.append(message["text"]))
+    _feed(chat, [
+        {"sequence": 0, "text": "Salut ", "is_last": False},
+        {"sequence": 1, "text": "Milo", "is_last": False},
+        {"sequence": 2, "text": " !", "is_last": True},
+    ])
+    assert len(chat.messages) == 1
+    message = chat.messages[0]
+    assert message["role"] == "aletheia" and message["text"] == "Salut Milo !"
+    assert message["done"] is True
+    # La console reçoit l'état après chaque fragment, pour l'affichage progressif.
+    assert vus == ["Salut ", "Salut Milo", "Salut Milo !"]
+
+
+def test_un_nouveau_tour_ouvre_un_nouveau_message():
+    chat = Chat(lambda _: None)
+    _feed(chat, [
+        {"sequence": 0, "text": "un", "is_last": True},
+        {"sequence": 0, "text": "deux", "is_last": True},
+    ])
+    assert [m["text"] for m in chat.messages] == ["un", "deux"]
+    assert len({m["id"] for m in chat.messages}) == 2
+
+
+def test_stay_silent_donne_un_tour_vide_mais_termine():
+    """Le dernier fragment peut n'avoir aucun texte: c'est un silence, pas une perte."""
+    chat = Chat(lambda _: None)
+    _feed(chat, [{"sequence": 0, "text": "", "is_last": True}])
+    assert len(chat.messages) == 1
+    assert chat.messages[0]["text"] == "" and chat.messages[0]["done"] is True
+
+
+def test_un_fragment_illisible_ne_casse_pas_le_fil():
+    chat = Chat(lambda _: None)
+
+    class Casse:
+        data = b"{ceci n'est pas du JSON"
+
+    async def run():
+        await chat._on_fragment(Casse())
+        await chat._on_fragment(_Msg({"sequence": 0, "text": "ok", "is_last": True}))
+    asyncio.run(run())
+    assert [m["text"] for m in chat.messages] == ["ok"]
+
+
+def test_envoyer_sans_bus_echoue_au_lieu_de_perdre_le_message():
+    chat = Chat(lambda _: None)
+    assert chat.connected is False
+    with pytest.raises(ConnectionError):
+        asyncio.run(chat.send("coucou"))
+    assert len(chat.messages) == 0

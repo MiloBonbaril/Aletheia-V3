@@ -23,8 +23,8 @@ If you change a payload or add a topic:
 
 #### `io.user.msg.text`
 
-A user sends a text message. The publishers are `io_text` and `io_discord`. Each publisher adds the
-name of the speaker to the text.
+A user sends a text message. The publishers are `io_text`, `io_discord` and the chat tab of
+`terminal`. Each publisher adds the name of the speaker to the text.
 
 - **Payload (JSON):**
   ```json
@@ -452,6 +452,7 @@ restart of the cortex clears them.
 | limbic | `limbic.mood.set`, `cortex.interaction.started`, `io.presence.discord_voice` | `limbic.mood.update`, `limbic.proactive.trigger`, `lobe.topic.generate` (request) |
 | io_oreilles | `io.discord.voice.frame` (`--discord` only) | `io.user.speak`, `io.user.speak.raw` |
 | io_voix | `lobe.fragment_stream` | `io.voice.speak.start`, `io.voice.speak.audio`, `io.voice.speak.end` |
+| terminal | `lobe.fragment_stream` | `io.user.msg.text` |
 | io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame` |
 | io_text | — | `io.user.msg.text` |
 | benchmark | all topics of the loaded graph | — |

@@ -288,6 +288,92 @@ function LogPanel({ s, lines, onClose }) {
     </aside>`;
 }
 
+// ---------- chat tab ----------
+
+function ChatTab({ messages, connected }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+  const box = useRef(null);
+  const stuck = useRef(true);
+
+  // On colle au bas, sauf si le lecteur est remonté lire un message précédent.
+  useEffect(() => {
+    if (stuck.current && box.current) box.current.scrollTop = box.current.scrollHeight;
+  });
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) { setError(await response.text()); return; }
+      setDraft("");
+      stuck.current = true;
+    } catch {
+      setError("le daemon ne répond pas");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  return html`
+    <div class="body">
+      <main class="main chat">
+        <header>
+          <div>
+            <h1>Chat</h1>
+            <p>publie sur <code>io.user.msg.text</code>, comme io_text</p>
+          </div>
+          <span class="spacer"></span>
+          <span class="badge-daemon">
+            <span class=${`dot ${connected ? "running" : "crashed"}`}></span>
+            ${connected ? "connecté au bus" : "bus injoignable"}
+          </span>
+        </header>
+
+        <div class="thread" ref=${box}
+             onScroll=${(e) => {
+               const t = e.currentTarget;
+               stuck.current = t.scrollHeight - t.scrollTop - t.clientHeight < 40;
+             }}>
+          ${messages.length === 0
+            ? html`<p class="empty">aucun message. Le tampon vit en mémoire et part avec le daemon.</p>`
+            : messages.map((m) => html`
+                <div class=${`msg ${m.role}`} key=${m.id}>
+                  <span class="who">${m.role === "moi" ? "moi" : "aletheia"}</span>
+                  <div class="txt">
+                    ${m.text || (m.done ? html`<i class="silence">silence</i>` : "")}
+                    ${!m.done && html`<span class="caret"></span>`}
+                  </div>
+                  <span class="at">${clock(m.t)}</span>
+                </div>`)}
+        </div>
+
+        ${error && html`<p class="sendfail">${error}</p>`}
+
+        <div class="composer">
+          <textarea rows="3" placeholder=${connected ? "Entrée pour envoyer · Maj+Entrée pour un retour à la ligne" : "le daemon n'est pas connecté au bus"}
+                    value=${draft} disabled=${!connected}
+                    onKeyDown=${onKeyDown} onInput=${(e) => setDraft(e.target.value)}></textarea>
+          <button class="primary" onClick=${send} disabled=${!connected || sending || !draft.trim()}>
+            Envoyer
+          </button>
+        </div>
+      </main>
+    </div>`;
+}
+
 // ---------- config tab ----------
 
 function ConfigTab() {
@@ -429,9 +515,12 @@ function App() {
   const [filter, setFilter] = useState("");
   const [view, setView] = useState("grid");
   const [tab, setTab] = useState("services");
+  const [chat, setChat] = useState([]);
   const [online, setOnline] = useState(false);
 
   useEffect(() => {
+    // Le tampon du daemon existe avant l'ouverture de l'onglet: on le rattrape.
+    fetch("/api/chat").then((r) => r.json()).then((d) => setChat(d.messages)).catch(() => {});
     const source = new EventSource("/api/stream");
     source.onopen = () => setOnline(true);
     source.onerror = () => setOnline(false);
@@ -440,6 +529,15 @@ function App() {
       if (payload.type === "state") {
         setOnline(true);
         setSnap(payload);
+      } else if (payload.type === "chat") {
+        // Le daemon renvoie le message entier à chaque fragment: on remplace par id.
+        setChat((prev) => {
+          const at = prev.findIndex((m) => m.id === payload.message.id);
+          if (at === -1) return [...prev, payload.message];
+          const next = [...prev];
+          next[at] = payload.message;
+          return next;
+        });
       } else if (payload.type === "log") {
         setLogs((prev) => {
           const next = [...(prev[payload.service] || []), payload.line];
@@ -487,6 +585,8 @@ function App() {
         <nav class="tabs">
           <button class=${`tab ${tab === "services" ? "active" : ""}`}
                   onClick=${() => setTab("services")}>Services</button>
+          <button class=${`tab ${tab === "chat" ? "active" : ""}`}
+                  onClick=${() => setTab("chat")}>Chat</button>
           <button class=${`tab ${tab === "config" ? "active" : ""}`}
                   onClick=${() => setTab("config")}>Config</button>
         </nav>
@@ -497,7 +597,9 @@ function App() {
         </span>
       </div>
 
-      ${tab === "config" ? html`<${ConfigTab} />` : html`
+      ${tab === "config" ? html`<${ConfigTab} />`
+        : tab === "chat" ? html`<${ChatTab} messages=${chat} connected=${(snap.chat || {}).connected} />`
+        : html`
       <div class="body">
         <${Sidebar} services=${all} profiles=${snap.profiles} host=${snap.host}
                     group=${group} setGroup=${setGroup} />

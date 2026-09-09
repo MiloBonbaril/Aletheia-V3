@@ -11,10 +11,11 @@ The service has two parts:
 
 - The **daemon** (`main.py`) owns the processes. It starts each service in its own process group,
   it reads the output, and it samples the resources. It serves an HTTP API on `127.0.0.1:7420`.
-- The **console** (`web/`) is the web interface that the daemon serves. It shows two tabs,
-  `Services` and `Config`.
+- The **console** (`web/`) is the web interface that the daemon serves. It shows three tabs,
+  `Services`, `Chat` and `Config`.
 
-Read `docs/adr/0003-terminal-superviseur-de-processus-local.md` for the reasons of the design.
+Read `docs/adr/0003-terminal-superviseur-de-processus-local.md` for the reasons of the design, and
+`docs/adr/0004-le-terminal-publie-et-ecoute-un-seul-sujet.md` for the bus access of the chat tab.
 
 ## 🚀 Start
 
@@ -93,6 +94,24 @@ and right arrow keys. A double click puts it back to 420 px. The browser keeps t
 `localStorage`, thus it stays across a reload. The width has a floor of 320 px and a ceiling that
 leaves 620 px to the sidebar and the main column, or the toolbar of the main column overflows.
 
+## 💬 The Chat tab
+
+The tab does the work of `io_text` from the browser: it publishes on `io.user.msg.text` and it
+shows the answer. `Enter` sends. `Shift+Enter` gives a new line.
+
+The answer appears word by word: the daemon rebuilds it from `lobe.fragment_stream`, and it sends
+the message again at each fragment. A cursor shows that the last fragment is not there yet. A turn
+with no text is a `stay_silent` call, and the tab writes "silence".
+
+**This is the only place where the daemon touches the bus.** It publishes one topic, it subscribes
+to one topic, and `/connz` shows the daemon under the name `terminal` with one subscription. That
+number is the check. ADR 0004 explains why an audio topic must never join that list.
+
+The messages stay in memory, in a buffer of 200. The buffer disappears with the daemon, like the
+log buffers, and nothing goes to the disk.
+
+`io_text` stays in the manifest. It works when the console does not run.
+
 ## ✏️ The Config tab
 
 The tab edits the three Markdown files of the prompt of `lobe_frontal`: `PERSONA.md` (the
@@ -164,4 +183,5 @@ cd services/terminal
 
 The message rate, the end-to-end latency and the p95 stay
 the property of `services/benchmark`, which measures them correctly. A browser shell, the launch of
-`io_visage` and `io_yeux`, and the persistence of the logs are not present.
+`io_visage` and `io_yeux`, and the persistence of the logs are not present. The chat tab sends text
+only: `io.user.msg.text` accepts an `images` field, and the tab does not fill it.

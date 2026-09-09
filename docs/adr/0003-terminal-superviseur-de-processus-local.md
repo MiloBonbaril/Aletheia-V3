@@ -22,7 +22,9 @@ generation and reload for command lines that change often during development, an
 orphans alive. `supervisord` — rejected, it adds a dependency and its log capture goes through
 files.
 
-**The bus figures come from the monitoring endpoint of NATS, not from a subscription.** In a system
+**The bus figures come from the monitoring endpoint of NATS, not from a subscription.**
+(ADR 0004 amends this decision for the chat tab: the daemon subscribes to `lobe.fragment_stream`,
+and to nothing else.) In a system
 where the rule is "everything goes through NATS", a dashboard that does not subscribe to the bus is
 a surprise. The reason is the payloads. A `>` subscription receives `io.discord.voice.frame`, which
 is a continuous flow of PCM audio, and `io.voice.speak.audio`, which is 44.1 kHz audio for each

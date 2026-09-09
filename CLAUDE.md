@@ -88,10 +88,13 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `127.0.0.1:7420`. It starts, stops, rebuilds and monitors each service, and it keeps a buffer of
   2000 log lines for each one in memory. `services.toml` is the manifest: it declares the command,
   the group, the start order, the named profiles and the text files that the `Config` tab edits.
-  That tab writes the three prompt files of `lobe_frontal`. The daemon kills every
-  service when it stops, and it never restarts a crashed one. It reads the bus through the
-  monitoring endpoint of NATS (`/varz`, `/connz`), never through a subscription, thus no payload
-  passes through it. See `docs/adr/0003-terminal-superviseur-de-processus-local.md`.
+  That tab writes the three prompt files of `lobe_frontal`. The daemon kills every service when it
+  stops, and it never restarts a crashed one. It reads the bus figures through the monitoring
+  endpoint of NATS (`/varz`, `/connz`), never through a subscription. A `Chat` tab does the work of
+  `io_text` from the browser: it is the only part that touches the bus, and it uses two topics only
+  (`io.user.msg.text` out, `lobe.fragment_stream` in). See
+  `docs/adr/0003-terminal-superviseur-de-processus-local.md` and
+  `docs/adr/0004-le-terminal-publie-et-ecoute-un-seul-sujet.md`.
 - **io_yeux**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
   two contain a README file only. There is no source code.
 
