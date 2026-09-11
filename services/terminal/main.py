@@ -27,7 +27,7 @@ from aiohttp.web_runner import GracefulExit
 from chat import Chat
 from metrics import BusMonitor, Sampler
 from supervisor import Manifest, Supervisor
-from tickets import Board
+from tickets import Board, Conflict
 
 VERSION = "0.1.0"
 HOST, PORT = "127.0.0.1", 7420
@@ -238,6 +238,30 @@ async def api_profile_action(request: web.Request) -> web.Response:
 @routes.get("/api/tickets")
 async def api_tickets_list(request: web.Request) -> web.Response:
     return web.json_response(daemon(request).board.state())
+
+
+@routes.put("/api/tickets/{id}")
+async def api_ticket_update(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        changes = body["changes"]
+    except (ValueError, KeyError, TypeError):
+        raise web.HTTPBadRequest(text="le corps doit contenir un objet `changes`")
+    if not isinstance(changes, dict):
+        raise web.HTTPBadRequest(text="le corps doit contenir un objet `changes`")
+    try:
+        ticket = daemon(request).board.update(
+            int(request.match_info["id"]), changes, str(body.get("mtime") or "")
+        )
+    except ValueError as exc:  # un id non numérique, ou un champ refusé
+        raise web.HTTPBadRequest(text=str(exc))
+    except LookupError as exc:
+        raise web.HTTPNotFound(text=str(exc))
+    except Conflict as exc:
+        # Le ticket a changé sur le disque depuis que la carte a été lue. La
+        # console reçoit la version de l'autre écrivain, elle ne l'écrase pas.
+        return web.json_response({"error": "conflit", "ticket": exc.ticket.state()}, status=409)
+    return web.json_response({"ok": True, "ticket": ticket.state()})
 
 
 # ---------- chat ----------

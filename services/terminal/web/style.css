@@ -347,3 +347,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tag.basse { color: var(--faint); }
 
 .more { width: 100%; font-size: 11px; color: var(--muted); padding: 3px; }
+.col.over { border-color: var(--ink); background: var(--line-soft); }
+.tk { cursor: grab; }
+.tk:active { cursor: grabbing; }
+.tknote { font-size: 11px; color: var(--muted); }
+.tknote.warn { color: var(--warn); }
+.tknote.err { color: var(--err); }

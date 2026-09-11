@@ -12,7 +12,9 @@ truth: it reads the folder again each time the dates change.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 # The five statuses, as ASCII French slugs. No accent: a `grep` or a `sed` of an
@@ -22,11 +24,26 @@ PRIORITIES = ("haute", "normale", "basse")
 # A ticket with no priority takes the place of a normal one.
 RANK = {"haute": 0, "normale": 1, "basse": 2}
 REQUIRED = ("id", "title", "status", "created")
+# The console changes these fields and no other. `id` and `created` never move,
+# and `updated` is written by the board itself.
+WRITABLE = ("title", "status", "service", "priority")
 MARK = "---"
 
 
 class TicketError(ValueError):
-    """A file that does not follow the contract. The board leaves it out."""
+    """A file, or a change, that does not follow the contract."""
+
+
+class Conflict(Exception):
+    """The file changed on the disk since the browser read it.
+
+    It carries the ticket as the disk holds it now, thus the console shows the
+    other version without reading the folder again.
+    """
+
+    def __init__(self, ticket: "Ticket") -> None:
+        super().__init__("le ticket a changé sur le disque")
+        self.ticket = ticket
 
 
 @dataclass
@@ -164,3 +181,55 @@ class Board:
                 continue
             marks.append((path.name, stat.st_mtime_ns, stat.st_size))
         return tuple(marks)
+
+    def get(self, ticket_id: int) -> Ticket:
+        for ticket in self.tickets():
+            if ticket.id == ticket_id:
+                return ticket
+        raise LookupError(f"ticket inconnu : {ticket_id}")
+
+    # ---------- writing ----------
+
+    def update(self, ticket_id: int, changes: dict[str, str], mtime: str) -> Ticket:
+        """Change some fields of one ticket, and write the file.
+
+        `mtime` is the version that the browser read. A version that the browser
+        never saw is never overwritten: the developer edits the same file in an
+        editor, and an agent writes it from another session.
+        """
+        ticket = self.get(ticket_id)
+        if ticket.mtime != mtime:
+            raise Conflict(ticket)
+
+        clean = {}
+        for key, value in changes.items():
+            if key not in WRITABLE:
+                raise TicketError(f"champ non modifiable : {key!r}")
+            value = str(value).strip()
+            # The front matter is flat, one line for one key. A value with a line
+            # break would write a second key, or close the block.
+            if "\n" in value or "\r" in value:
+                raise TicketError(f"valeur sur plusieurs lignes : {key!r}")
+            if key == "status" and value not in STATUSES:
+                raise TicketError(f"statut inconnu : {value!r}")
+            if key == "priority" and value and value not in PRIORITIES:
+                raise TicketError(f"priorité inconnue : {value!r}")
+            if key == "title" and not value:
+                raise TicketError("titre vide")
+            clean[key] = value
+
+        ticket.fields.update(clean)
+        ticket.fields["updated"] = date.today().isoformat()
+        return self._save(ticket)
+
+    def _save(self, ticket: Ticket) -> Ticket:
+        """Write beside the file, then rename.
+
+        A daemon that dies in the middle leaves the old ticket whole, never a
+        half written one. There is no `.bak` copy: the folder is in git.
+        """
+        temp = ticket.path.with_name(ticket.path.name + ".tmp")
+        temp.write_text(ticket.to_text(), encoding="utf-8")
+        os.replace(temp, ticket.path)
+        ticket.mtime = str(ticket.path.stat().st_mtime_ns)
+        return ticket

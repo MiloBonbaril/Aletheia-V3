@@ -225,7 +225,7 @@ status: en-cours
 service: io_voix
 priority: haute
 created: 2026-09-11
-updated: 2026-09-12
+updated: 2026-09-11
 ---
 
 Le corps, en Markdown libre.
@@ -336,3 +336,86 @@ def test_letat_du_board_est_serialisable_pour_la_console(tmp_path):
     # entière du navigateur.
     assert isinstance(entry["mtime"], str) and entry["mtime"]
     _json.dumps(state)
+
+
+# ---------- board: écriture ----------
+
+import datetime  # noqa: E402
+
+from tickets import Conflict, TicketError  # noqa: E402
+
+TODAY = datetime.date.today().isoformat()
+
+
+def test_deplacer_un_ticket_ne_touche_que_le_statut_et_la_date(tmp_path):
+    path = _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    ticket = board.tickets()[0]
+    board.update(7, {"status": "termine"}, ticket.mtime)
+
+    avant = TICKET.split("\n")
+    apres = path.read_text(encoding="utf-8").split("\n")
+    differences = [(a, b) for a, b in zip(avant, apres) if a != b]
+    assert len(avant) == len(apres)
+    assert differences == [
+        ("status: en-cours", "status: termine"),
+        ("updated: 2026-09-11", f"updated: {TODAY}"),
+    ]
+
+
+def test_un_statut_inconnu_est_refuse_et_le_fichier_ne_bouge_pas(tmp_path):
+    path = _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    mtime = board.tickets()[0].mtime
+    with pytest.raises(TicketError, match="statut"):
+        board.update(7, {"status": "fantome"}, mtime)
+    assert path.read_text(encoding="utf-8") == TICKET
+
+
+def test_un_champ_inconnu_est_refuse(tmp_path):
+    _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    mtime = board.tickets()[0].mtime
+    with pytest.raises(TicketError, match="champ"):
+        board.update(7, {"assignee": "milo"}, mtime)
+
+
+def test_une_empreinte_perimee_donne_un_conflit_et_laisse_le_disque_tranquille(tmp_path):
+    """Un agent a écrit entre l'ouverture de la carte et le dépôt de la carte."""
+    path = _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    perimee = board.tickets()[0].mtime
+    board.update(7, {"status": "bloque"}, perimee)  # l'autre écrivain passe en premier
+
+    with pytest.raises(Conflict) as levee:
+        board.update(7, {"status": "termine"}, perimee)
+    # La console doit pouvoir montrer la version du disque sans relire elle-même.
+    assert levee.value.ticket.status == "bloque"
+    assert levee.value.ticket.mtime != perimee
+    assert "status: bloque" in path.read_text(encoding="utf-8")
+
+
+def test_un_id_inconnu_ne_cree_rien(tmp_path):
+    _write(tmp_path, "0007-voix.md", TICKET)
+    with pytest.raises(LookupError):
+        Board(tmp_path).update(4242, {"status": "termine"}, "0")
+    assert [p.name for p in tmp_path.iterdir()] == ["0007-voix.md"]
+
+
+def test_lecriture_ajoute_updated_quand_le_fichier_ne_lavait_pas(tmp_path):
+    _write(
+        tmp_path,
+        "0011-t.md",
+        "---\nid: 11\ntitle: T\nstatus: en-attente\ncreated: 2026-09-01\n---\n\nCorps.\n",
+    )
+    board = Board(tmp_path)
+    ticket = board.update(11, {"status": "en-cours"}, board.tickets()[0].mtime)
+    assert ticket.updated == TODAY
+    assert board.tickets()[0].fields["updated"] == TODAY
+
+
+def test_lecriture_est_atomique_et_ne_laisse_aucun_fichier_temporaire(tmp_path):
+    _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    board.update(7, {"status": "termine"}, board.tickets()[0].mtime)
+    assert [p.name for p in tmp_path.iterdir()] == ["0007-voix.md"]

@@ -522,9 +522,10 @@ const DONE_SHOWN = 10;
 
 const recent = (a, b) => (b.updated || "").localeCompare(a.updated || "") || b.id - a.id;
 
-function TicketCard({ t }) {
+function TicketCard({ t, onDragStart }) {
   return html`
-    <article class="tk" title=${t.file}>
+    <article class="tk" draggable=${true} title=${t.file}
+             onDragStart=${(e) => onDragStart(e, t)}>
       <div class="t">${t.title}</div>
       <div class="meta">
         <span class="n">#${t.id}</span>
@@ -535,11 +536,60 @@ function TicketCard({ t }) {
     </article>`;
 }
 
-function KanbanTab({ tickets }) {
+function KanbanTab({ tickets, setTickets }) {
   const [service, setService] = useState("*");
   const [allDone, setAllDone] = useState(false);
+  const [note, setNote] = useState(null);
+  const [over, setOver] = useState(null);
+  const dragged = useRef(null);
   const services = [...new Set(tickets.map((t) => t.service).filter(Boolean))].sort();
   const visible = service === "*" ? tickets : tickets.filter((t) => t.service === service);
+
+  const replace = (ticket) => setTickets((prev) => prev.map((t) => (t.id === ticket.id ? ticket : t)));
+
+  const onDragStart = (e, t) => {
+    dragged.current = t;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(t.id));  // Firefox refuse un glissement sans données
+  };
+
+  // La carte saisie ne sert qu'une fois. Sans cela, un fichier lâché sur une
+  // colonne depuis le bureau déplacerait la carte du glissement précédent.
+  const take = () => {
+    const t = dragged.current;
+    dragged.current = null;
+    return t;
+  };
+
+  // `mtime` est la version que le navigateur a lue. Le daemon refuse d'écrire
+  // par-dessus une version qu'il n'a jamais montrée: un agent écrit le même
+  // fichier depuis une autre session.
+  const move = async (t, status) => {
+    if (!t || t.status === status) return;
+    let response;
+    try {
+      response = await fetch(`/api/tickets/${t.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ changes: { status }, mtime: t.mtime }),
+      });
+    } catch {
+      setNote({ kind: "err", text: "le daemon ne répond pas" });
+      return;
+    }
+    const body = await response.json().catch(() => ({}));
+    if (response.status === 409 && body.ticket) {
+      replace(body.ticket);
+      setNote({ kind: "warn", text: `#${t.id} a changé sur le disque · la carte reprend la version du disque` });
+      return;
+    }
+    if (!response.ok) {
+      setNote({ kind: "err", text: `déplacement de #${t.id} refusé par le daemon` });
+      return;
+    }
+    replace(body.ticket);
+    setNote(null);
+  };
 
   return html`
     <main class="main kanban">
@@ -550,6 +600,7 @@ function KanbanTab({ tickets }) {
         </div>
         <span class="spacer"></span>
         <div class="toolbar">
+          ${note && html`<span class=${`tknote ${note.kind}`}>${note.text}</span>`}
           <select value=${service} onChange=${(e) => setService(e.target.value)}>
             <option value="*">tous les services</option>
             ${services.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
@@ -567,14 +618,17 @@ function KanbanTab({ tickets }) {
             const shown = done ? [...found].sort(recent) : found;
             const hidden = done && !allDone ? Math.max(0, shown.length - DONE_SHOWN) : 0;
             return html`
-              <section key=${status} class=${`col ${status}`}>
+              <section key=${status} class=${`col ${status} ${over === status ? "over" : ""}`}
+                       onDragOver=${(e) => { e.preventDefault(); if (over !== status) setOver(status); }}
+                       onDragLeave=${() => setOver((c) => (c === status ? null : c))}
+                       onDrop=${(e) => { e.preventDefault(); setOver(null); move(take(), status); }}>
                 <header>
                   <span class="label">${libelle}</span>
                   <span class="n">${found.length}</span>
                 </header>
                 <div class="stack">
                   ${(hidden ? shown.slice(0, DONE_SHOWN) : shown).map((t) => html`
-                    <${TicketCard} key=${t.id} t=${t} />`)}
+                    <${TicketCard} key=${t.id} t=${t} onDragStart=${onDragStart} />`)}
                   ${hidden > 0 && html`
                     <button class="more" onClick=${() => setAllDone(true)}>+${hidden} de plus</button>`}
                   ${done && allDone && found.length > DONE_SHOWN && html`
@@ -686,7 +740,7 @@ function App() {
       </div>
 
       ${tab === "config" ? html`<${ConfigTab} />`
-        : tab === "kanban" ? html`<${KanbanTab} tickets=${tickets} />`
+        : tab === "kanban" ? html`<${KanbanTab} tickets=${tickets} setTickets=${setTickets} />`
         : tab === "chat" ? html`<${ChatTab} messages=${chat} connected=${(snap.chat || {}).connected} />`
         : html`
       <div class="body">
