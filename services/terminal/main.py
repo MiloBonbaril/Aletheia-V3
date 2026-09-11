@@ -235,24 +235,40 @@ async def api_profile_action(request: web.Request) -> web.Response:
 # ---------- tickets ----------
 
 
+def int_id(request: web.Request) -> int:
+    try:
+        return int(request.match_info["id"])
+    except ValueError:
+        raise web.HTTPBadRequest(text="id non numérique")
+
+
 @routes.get("/api/tickets")
 async def api_tickets_list(request: web.Request) -> web.Response:
     return web.json_response(daemon(request).board.state())
 
 
-@routes.put("/api/tickets/{id}")
-async def api_ticket_update(request: web.Request) -> web.Response:
+async def _ticket_request(request: web.Request) -> tuple[dict, str, str | None]:
+    """Read the body that the console sends: les champs, la version, le corps."""
     try:
         body = await request.json()
-        changes = body["changes"]
-    except (ValueError, KeyError, TypeError):
-        raise web.HTTPBadRequest(text="le corps doit contenir un objet `changes`")
+    except ValueError:
+        raise web.HTTPBadRequest(text="le corps doit être du JSON")
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="le corps doit être un objet JSON")
+    changes = body.get("changes", {})
     if not isinstance(changes, dict):
-        raise web.HTTPBadRequest(text="le corps doit contenir un objet `changes`")
+        raise web.HTTPBadRequest(text="`changes` doit être un objet")
+    text = body.get("body")
+    return changes, str(body.get("mtime") or ""), text if isinstance(text, str) else None
+
+
+def _board_call(call, *args, **kwargs):
+    """Run one operation of the board and translate its refusals into answers.
+
+    The handlers hold no logic of their own: the board decides, they speak HTTP.
+    """
     try:
-        ticket = daemon(request).board.update(
-            int(request.match_info["id"]), changes, str(body.get("mtime") or "")
-        )
+        return call(*args, **kwargs)
     except ValueError as exc:  # un id non numérique, ou un champ refusé
         raise web.HTTPBadRequest(text=str(exc))
     except LookupError as exc:
@@ -260,8 +276,34 @@ async def api_ticket_update(request: web.Request) -> web.Response:
     except Conflict as exc:
         # Le ticket a changé sur le disque depuis que la carte a été lue. La
         # console reçoit la version de l'autre écrivain, elle ne l'écrase pas.
-        return web.json_response({"error": "conflit", "ticket": exc.ticket.state()}, status=409)
+        raise web.HTTPConflict(
+            text=json.dumps({"error": "conflit", "ticket": exc.ticket.state()}),
+            content_type="application/json",
+        )
+
+
+@routes.post("/api/tickets")
+async def api_ticket_create(request: web.Request) -> web.Response:
+    changes, _, body = await _ticket_request(request)
+    app_daemon = daemon(request)
+    ticket = _board_call(app_daemon.board.create, changes, body or "")
+    return web.json_response({"ok": True, "ticket": ticket.state()}, status=201)
+
+
+@routes.put("/api/tickets/{id}")
+async def api_ticket_update(request: web.Request) -> web.Response:
+    changes, mtime, body = await _ticket_request(request)
+    ticket = _board_call(
+        daemon(request).board.update, int_id(request), changes, mtime, body
+    )
     return web.json_response({"ok": True, "ticket": ticket.state()})
+
+
+@routes.delete("/api/tickets/{id}")
+async def api_ticket_delete(request: web.Request) -> web.Response:
+    _, mtime, _ = await _ticket_request(request)
+    _board_call(daemon(request).board.delete, int_id(request), mtime)
+    return web.json_response({"ok": True})
 
 
 # ---------- chat ----------

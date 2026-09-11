@@ -522,10 +522,10 @@ const DONE_SHOWN = 10;
 
 const recent = (a, b) => (b.updated || "").localeCompare(a.updated || "") || b.id - a.id;
 
-function TicketCard({ t, onDragStart }) {
+function TicketCard({ t, onDragStart, onOpen }) {
   return html`
     <article class="tk" draggable=${true} title=${t.file}
-             onDragStart=${(e) => onDragStart(e, t)}>
+             onDragStart=${(e) => onDragStart(e, t)} onClick=${() => onOpen(t)}>
       <div class="t">${t.title}</div>
       <div class="meta">
         <span class="n">#${t.id}</span>
@@ -536,16 +536,161 @@ function TicketCard({ t, onDragStart }) {
     </article>`;
 }
 
+const PRIORITIES = ["haute", "normale", "basse"];
+
+// Le panneau d'édition, sur le patron de l'onglet Config: un brouillon local,
+// un bouton d'enregistrement, et le conflit visible au lieu d'un écrasement.
+function TicketPanel({ t, onClose, onSaved, onDeleted }) {
+  const [draft, setDraft] = useState(null);
+  const [note, setNote] = useState(null);
+  const [armed, setArmed] = useState(false);
+
+  // `mtime` est figé à l'ouverture: c'est la version que l'on a sous les yeux.
+  // Il ne suit pas les mises à jour du flux, sinon le garde-fou ne garde rien.
+  useEffect(() => {
+    setDraft({
+      title: t.title, service: t.service || "", priority: t.priority || "",
+      body: t.body, mtime: t.mtime,
+    });
+    setNote(null);
+    setArmed(false);
+  }, [t.id]);
+
+  if (!draft) return null;
+  const set = (key, value) => { setArmed(false); setDraft({ ...draft, [key]: value }); };
+
+  const save = async () => {
+    let response;
+    try {
+      response = await fetch(`/api/tickets/${t.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          changes: { title: draft.title, service: draft.service, priority: draft.priority },
+          body: draft.body,
+          mtime: draft.mtime,
+        }),
+      });
+    } catch {
+      setNote({ kind: "err", text: "le daemon ne répond pas" });
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 409 && payload.ticket) {
+      onSaved(payload.ticket);
+      setNote({ kind: "warn", text: "le ticket a changé sur le disque depuis l'ouverture", disk: payload.ticket });
+      return;
+    }
+    if (!response.ok) {
+      setNote({ kind: "err", text: "écriture refusée par le daemon" });
+      return;
+    }
+    onSaved(payload.ticket);
+    setDraft({ ...draft, mtime: payload.ticket.mtime });
+    setNote({ kind: "ok", text: "enregistré" });
+  };
+
+  // Deux temps plutôt qu'une boîte de dialogue: le premier clic arme, le second
+  // supprime. Un navigateur qui refuse `confirm` rendrait le bouton inerte.
+  const remove = async () => {
+    if (!armed) { setArmed(true); return; }
+    const response = await fetch(`/api/tickets/${t.id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mtime: draft.mtime }),
+    }).catch(() => null);
+    if (!response || !response.ok) {
+      setNote({ kind: "err", text: "suppression refusée · le ticket a changé sur le disque" });
+      return;
+    }
+    onDeleted(t.id);
+  };
+
+  const takeDisk = (disk) => {
+    setDraft({
+      title: disk.title, service: disk.service || "", priority: disk.priority || "",
+      body: disk.body, mtime: disk.mtime,
+    });
+    setNote(null);
+  };
+
+  return html`
+    <aside class="tkedit">
+      <header>
+        <h2>#${t.id}<button class="close" onClick=${onClose} title="fermer">✕</button></h2>
+        <div class="meta">${t.file} · créé le ${t.created} · modifié le ${t.updated}</div>
+      </header>
+      <div class="form">
+        <label>
+          <span class="label">Titre</span>
+          <input value=${draft.title} onInput=${(e) => set("title", e.target.value)} />
+        </label>
+        <div class="pair">
+          <label>
+            <span class="label">Service</span>
+            <input value=${draft.service} placeholder="aucun"
+                   onInput=${(e) => set("service", e.target.value)} />
+          </label>
+          <label>
+            <span class="label">Priorité</span>
+            <select value=${draft.priority} onChange=${(e) => set("priority", e.target.value)}>
+              <option value="">aucune</option>
+              ${PRIORITIES.map((p) => html`<option key=${p} value=${p}>${p}</option>`)}
+            </select>
+          </label>
+        </div>
+        <label class="grow">
+          <span class="label">Corps</span>
+          <textarea spellcheck=${false} value=${draft.body}
+                    onInput=${(e) => set("body", e.target.value)}></textarea>
+        </label>
+      </div>
+      <div class=${`status ${note ? note.kind : ""}`}>
+        ${note ? html`
+            <span>${note.text}</span>
+            ${note.disk && html`
+              <button onClick=${() => takeDisk(note.disk)}>Prendre la version du disque</button>`}`
+          : html`<span>le statut se change en glissant la carte</span>`}
+        <span class="spacer"></span>
+        <button class=${`danger ${armed ? "armed" : ""}`} onClick=${remove}>
+          ${armed ? "Confirmer la suppression" : "Supprimer"}
+        </button>
+        <button class="primary" onClick=${save}>Enregistrer</button>
+      </div>
+    </aside>`;
+}
+
 function KanbanTab({ tickets, setTickets }) {
   const [service, setService] = useState("*");
   const [allDone, setAllDone] = useState(false);
   const [note, setNote] = useState(null);
   const [over, setOver] = useState(null);
+  const [openId, setOpenId] = useState(null);
   const dragged = useRef(null);
+  const open = tickets.find((t) => t.id === openId) || null;
   const services = [...new Set(tickets.map((t) => t.service).filter(Boolean))].sort();
   const visible = service === "*" ? tickets : tickets.filter((t) => t.service === service);
 
   const replace = (ticket) => setTickets((prev) => prev.map((t) => (t.id === ticket.id ? ticket : t)));
+
+  // Le board donne l'identifiant, la date et le nom du fichier. Le ticket naît
+  // avec un titre d'attente, et le panneau s'ouvre pour l'écrire: pas de boîte
+  // de dialogue, qu'un navigateur embarqué peut refuser d'afficher.
+  const create = async () => {
+    const response = await fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ changes: { title: "Nouveau ticket" } }),
+    }).catch(() => null);
+    const payload = response ? await response.json().catch(() => ({})) : {};
+    if (!response || !response.ok) {
+      setNote({ kind: "err", text: "création refusée par le daemon" });
+      return;
+    }
+    setTickets((prev) => [...prev, payload.ticket]);
+    setOpenId(payload.ticket.id);
+    setNote(null);
+  };
 
   const onDragStart = (e, t) => {
     dragged.current = t;
@@ -592,6 +737,7 @@ function KanbanTab({ tickets, setTickets }) {
   };
 
   return html`
+    <div class="body">
     <main class="main kanban">
       <header>
         <div>
@@ -605,6 +751,7 @@ function KanbanTab({ tickets, setTickets }) {
             <option value="*">tous les services</option>
             ${services.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
           </select>
+          <button class="primary" onClick=${create}>+ Ticket</button>
         </div>
       </header>
 
@@ -628,7 +775,8 @@ function KanbanTab({ tickets, setTickets }) {
                 </header>
                 <div class="stack">
                   ${(hidden ? shown.slice(0, DONE_SHOWN) : shown).map((t) => html`
-                    <${TicketCard} key=${t.id} t=${t} onDragStart=${onDragStart} />`)}
+                    <${TicketCard} key=${t.id} t=${t} onDragStart=${onDragStart}
+                                   onOpen=${() => setOpenId(t.id)} />`)}
                   ${hidden > 0 && html`
                     <button class="more" onClick=${() => setAllDone(true)}>+${hidden} de plus</button>`}
                   ${done && allDone && found.length > DONE_SHOWN && html`
@@ -637,7 +785,15 @@ function KanbanTab({ tickets, setTickets }) {
               </section>`;
           })}
         </div>`}
-    </main>`;
+    </main>
+    ${open && html`
+      <${TicketPanel} key=${open.id} t=${open} onClose=${() => setOpenId(null)}
+                      onSaved=${replace}
+                      onDeleted=${(id) => {
+                        setTickets((prev) => prev.filter((t) => t.id !== id));
+                        setOpenId(null);
+                      }} />`}
+    </div>`;
 }
 
 // ---------- app ----------

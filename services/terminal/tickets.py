@@ -13,6 +13,8 @@ truth: it reads the folder again each time the dates change.
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -27,7 +29,14 @@ REQUIRED = ("id", "title", "status", "created")
 # The console changes these fields and no other. `id` and `created` never move,
 # and `updated` is written by the board itself.
 WRITABLE = ("title", "status", "service", "priority")
+# An optional field that becomes empty leaves the front matter: `service: ` with
+# nothing after it is noise in a file that a person reads.
+OPTIONAL = ("service", "priority")
 MARK = "---"
+# The number at the head of a file name. It holds the identifier even when the
+# front matter of that file is broken.
+NUMBERED = re.compile(r"^(\d+)-")
+SLUG_MAX = 48
 
 
 class TicketError(ValueError):
@@ -122,6 +131,34 @@ def parse(text: str, path: Path, mtime: str) -> Ticket:
     return Ticket(path=path, fields=fields, body="\n".join(lines[close + 1:]), mtime=mtime)
 
 
+def slug(title: str) -> str:
+    """The file name part that comes from the title: ASCII, lower case, dashes."""
+    plain = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode()
+    cut = re.sub(r"[^a-z0-9]+", "-", plain.lower()).strip("-")[:SLUG_MAX].strip("-")
+    return cut or "ticket"
+
+
+def clean_fields(changes: dict[str, str]) -> dict[str, str]:
+    """Check the fields that the console sends, and give them back stripped."""
+    clean = {}
+    for key, value in changes.items():
+        if key not in WRITABLE:
+            raise TicketError(f"champ non modifiable : {key!r}")
+        value = str(value).strip()
+        # The front matter is flat, one line for one key. A value with a line
+        # break would write a second key, or close the block.
+        if "\n" in value or "\r" in value:
+            raise TicketError(f"valeur sur plusieurs lignes : {key!r}")
+        if key == "status" and value not in STATUSES:
+            raise TicketError(f"statut inconnu : {value!r}")
+        if key == "priority" and value and value not in PRIORITIES:
+            raise TicketError(f"priorité inconnue : {value!r}")
+        if key == "title" and not value:
+            raise TicketError("titre vide")
+        clean[key] = value
+    return clean
+
+
 class Board:
     """The folder of tickets, read on demand."""
 
@@ -190,7 +227,9 @@ class Board:
 
     # ---------- writing ----------
 
-    def update(self, ticket_id: int, changes: dict[str, str], mtime: str) -> Ticket:
+    def update(
+        self, ticket_id: int, changes: dict[str, str], mtime: str, body: str | None = None
+    ) -> Ticket:
         """Change some fields of one ticket, and write the file.
 
         `mtime` is the version that the browser read. A version that the browser
@@ -200,27 +239,62 @@ class Board:
         ticket = self.get(ticket_id)
         if ticket.mtime != mtime:
             raise Conflict(ticket)
-
-        clean = {}
-        for key, value in changes.items():
-            if key not in WRITABLE:
-                raise TicketError(f"champ non modifiable : {key!r}")
-            value = str(value).strip()
-            # The front matter is flat, one line for one key. A value with a line
-            # break would write a second key, or close the block.
-            if "\n" in value or "\r" in value:
-                raise TicketError(f"valeur sur plusieurs lignes : {key!r}")
-            if key == "status" and value not in STATUSES:
-                raise TicketError(f"statut inconnu : {value!r}")
-            if key == "priority" and value and value not in PRIORITIES:
-                raise TicketError(f"priorité inconnue : {value!r}")
-            if key == "title" and not value:
-                raise TicketError("titre vide")
-            clean[key] = value
-
+        clean = clean_fields(changes)
+        for key in OPTIONAL:
+            if clean.get(key) == "":
+                del clean[key]
+                ticket.fields.pop(key, None)
         ticket.fields.update(clean)
         ticket.fields["updated"] = date.today().isoformat()
+        if body is not None:
+            ticket.body = body
         return self._save(ticket)
+
+    def create(self, changes: dict[str, str], body: str = "") -> Ticket:
+        """Write a new ticket. The board gives the identifier, the date and the name."""
+        clean = clean_fields(changes)
+        if not clean.get("title"):
+            raise TicketError("un ticket neuf a besoin d'un titre")
+        clean = {key: value for key, value in clean.items() if value}
+        today = date.today().isoformat()
+        fields = {
+            "id": str(self.next_id()),
+            "title": clean.pop("title"),
+            "status": clean.pop("status", STATUSES[0]),
+            "created": today,
+            "updated": today,
+            **clean,
+        }
+        # A blank line between the front matter and the body: that is the shape
+        # of a ticket written by hand, and `docs/agents/tickets.md` shows it.
+        body = "\n" + body.lstrip("\n")
+        path = self._dir / f"{int(fields['id']):04d}-{slug(fields['title'])}.md"
+        if path.exists():
+            raise TicketError(f"le fichier existe déjà : {path.name}")
+        self._dir.mkdir(parents=True, exist_ok=True)
+        return self._save(Ticket(path=path, fields=fields, body=body, mtime=""))
+
+    def delete(self, ticket_id: int, mtime: str) -> None:
+        ticket = self.get(ticket_id)
+        if ticket.mtime != mtime:
+            raise Conflict(ticket)
+        ticket.path.unlink()
+
+    def next_id(self) -> int:
+        """The largest identifier in the folder, plus one.
+
+        The file names count too, not only the tickets that the board reads: a
+        file with a broken front matter keeps its number, and giving that number
+        again would make two tickets with the same identifier.
+        """
+        taken = [ticket.id for ticket in self.tickets()]
+        if self._dir.is_dir():
+            taken += [
+                int(found.group(1))
+                for path in self._dir.glob("*.md")
+                if (found := NUMBERED.match(path.name))
+            ]
+        return max(taken, default=0) + 1
 
     def _save(self, ticket: Ticket) -> Ticket:
         """Write beside the file, then rename.

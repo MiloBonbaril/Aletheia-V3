@@ -419,3 +419,112 @@ def test_lecriture_est_atomique_et_ne_laisse_aucun_fichier_temporaire(tmp_path):
     board = Board(tmp_path)
     board.update(7, {"status": "termine"}, board.tickets()[0].mtime)
     assert [p.name for p in tmp_path.iterdir()] == ["0007-voix.md"]
+
+
+# ---------- board: création et suppression ----------
+
+
+def test_le_prochain_id_part_de_un_sur_un_dossier_vide(tmp_path):
+    ticket = Board(tmp_path).create({"title": "Premier ticket"})
+    assert ticket.id == 1
+    assert ticket.path.name == "0001-premier-ticket.md"
+    assert ticket.status == "en-attente"
+    assert ticket.fields["created"] == TODAY and ticket.updated == TODAY
+
+
+def test_le_prochain_id_suit_le_plus_grand_meme_avec_un_trou(tmp_path):
+    for number in (1, 7):
+        _write(
+            tmp_path,
+            f"{number:04d}-t.md",
+            f"---\nid: {number}\ntitle: T\nstatus: en-attente\ncreated: 2026-09-01\n---\n",
+        )
+    assert Board(tmp_path).create({"title": "Suivant"}).id == 8
+
+
+def test_le_prochain_id_compte_aussi_un_fichier_que_le_board_ne_lit_pas(tmp_path):
+    """Un fichier cassé garde son numéro: le réutiliser ferait deux tickets #12."""
+    _write(tmp_path, "0012-casse.md", "pas de frontmatter\n")
+    assert Board(tmp_path).create({"title": "Suivant"}).id == 13
+
+
+def test_le_nom_de_fichier_est_un_slug_ascii_du_titre(tmp_path):
+    ticket = Board(tmp_path).create({"title": "Réduire la latence du préfill (TTFT) !"})
+    assert ticket.path.name == "0001-reduire-la-latence-du-prefill-ttft.md"
+
+
+def test_un_ticket_cree_est_relu_par_le_board(tmp_path):
+    board = Board(tmp_path)
+    board.create({
+        "title": "Voix plus naturelle",
+        "status": "en-cours",
+        "service": "io_voix",
+        "priority": "haute",
+    }, body="Le corps du ticket.\n")
+    relu = board.tickets()[0]
+    assert relu.title == "Voix plus naturelle" and relu.status == "en-cours"
+    assert relu.fields["service"] == "io_voix" and relu.fields["priority"] == "haute"
+    assert relu.body.strip() == "Le corps du ticket."
+    # Une ligne vide sépare le frontmatter du corps, comme dans un ticket écrit
+    # à la main.
+    assert relu.path.read_text(encoding="utf-8").count("---\n\n") == 1
+
+
+def test_un_titre_vide_ou_une_priorite_inconnue_sont_refuses_a_la_creation(tmp_path):
+    board = Board(tmp_path)
+    with pytest.raises(TicketError):
+        board.create({"title": "   "})
+    with pytest.raises(TicketError, match="priorité"):
+        board.create({"title": "T", "priority": "urgente"})
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_le_nom_de_fichier_ne_bouge_pas_quand_le_titre_change(tmp_path):
+    """Un lien vers un ticket doit rester valide."""
+    board = Board(tmp_path)
+    ticket = board.create({"title": "Ancien titre"})
+    board.update(ticket.id, {"title": "Nouveau titre"}, ticket.mtime)
+    assert [p.name for p in tmp_path.iterdir()] == ["0001-ancien-titre.md"]
+    assert board.tickets()[0].title == "Nouveau titre"
+
+
+def test_le_corps_sedite_sans_toucher_aux_autres_champs(tmp_path):
+    path = _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    board.update(7, {}, board.tickets()[0].mtime, body="\nUn corps tout neuf.\n")
+    relu = board.tickets()[0]
+    assert relu.body == "\nUn corps tout neuf.\n"
+    assert relu.status == "en-cours" and relu.title.startswith("Voix plus naturelle")
+    assert path.read_text(encoding="utf-8").endswith("---\n\nUn corps tout neuf.\n")
+
+
+def test_supprimer_enleve_le_fichier(tmp_path):
+    board = Board(tmp_path)
+    ticket = board.create({"title": "À jeter"})
+    board.delete(ticket.id, ticket.mtime)
+    assert list(tmp_path.iterdir()) == []
+    assert board.tickets() == []
+
+
+def test_supprimer_une_version_perimee_leve_un_conflit(tmp_path):
+    board = Board(tmp_path)
+    ticket = board.create({"title": "Occupé"})
+    board.update(ticket.id, {"status": "en-cours"}, ticket.mtime)  # un agent écrit
+    with pytest.raises(Conflict):
+        board.delete(ticket.id, ticket.mtime)
+    assert board.tickets()[0].status == "en-cours"
+
+
+def test_vider_un_champ_optionnel_enleve_la_ligne_du_frontmatter(tmp_path):
+    """`service: ` sans rien après est du bruit dans un fichier que l'on lit."""
+    path = _write(tmp_path, "0007-voix.md", TICKET)
+    board = Board(tmp_path)
+    board.update(7, {"service": "", "priority": ""}, board.tickets()[0].mtime)
+    texte = path.read_text(encoding="utf-8")
+    assert "service:" not in texte and "priority:" not in texte
+    assert board.tickets()[0].state()["service"] is None
+
+
+def test_un_champ_optionnel_vide_nest_pas_ecrit_a_la_creation(tmp_path):
+    ticket = Board(tmp_path).create({"title": "T", "service": "", "priority": ""})
+    assert "service:" not in ticket.path.read_text(encoding="utf-8")

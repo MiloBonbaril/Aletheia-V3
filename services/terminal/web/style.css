@@ -353,3 +353,40 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tknote { font-size: 11px; color: var(--muted); }
 .tknote.warn { color: var(--warn); }
 .tknote.err { color: var(--err); }
+
+.tkedit {
+  flex: none; width: 400px; max-width: 46vw;
+  display: flex; flex-direction: column; min-height: 0;
+  border-left: 1px solid var(--line); background: var(--panel);
+}
+.tkedit > header { padding: 14px 15px 11px; border-bottom: 1px solid var(--line); }
+.tkedit h2 { margin: 0; font: 600 14px var(--mono); display: flex; align-items: center; gap: 7px; }
+.tkedit .close { margin-left: auto; border: none; background: none; color: var(--faint); padding: 0 4px; }
+.tkedit .meta { margin-top: 4px; color: var(--muted); font: 11px var(--mono); }
+.tkedit .form { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 11px; padding: 14px 15px; }
+.tkedit label { display: flex; flex-direction: column; gap: 4px; }
+.tkedit label.grow { flex: 1; min-height: 0; }
+.tkedit .pair { display: flex; gap: 10px; }
+.tkedit .pair label { flex: 1; }
+.tkedit input, .tkedit select {
+  font: inherit; color: inherit; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px;
+}
+.tkedit textarea {
+  flex: 1; min-height: 120px; resize: none;
+  font: 12px/1.6 var(--mono); color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; tab-size: 2;
+}
+.tkedit input:focus, .tkedit select:focus, .tkedit textarea:focus { outline: none; border-color: var(--faint); }
+.tkedit .status {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 15px; border-top: 1px solid var(--line-soft); font-size: 11px; color: var(--muted);
+}
+.tkedit .status .spacer { flex: 1; }
+.tkedit .status button { padding: 3px 9px; font-size: 11px; }
+.tkedit .status button.danger { color: var(--err); border-color: var(--line); }
+.tkedit .status.ok > span:first-child { color: var(--ok); }
+.tkedit .status.warn > span:first-child { color: var(--warn); }
+.tkedit .status.err > span:first-child { color: var(--err); }
+.kanban { overflow-y: auto; }
+.tkedit .status button.danger.armed { background: var(--err); color: #fdfcf8; border-color: var(--err); }
