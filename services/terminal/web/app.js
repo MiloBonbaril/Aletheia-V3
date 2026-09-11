@@ -505,6 +505,87 @@ function ConfigTab() {
     </div>`;
 }
 
+// ---------- kanban tab ----------
+
+// Les cinq colonnes, dans l'ordre du flux. La clé est le slug ASCII écrit dans
+// le fichier ; le libellé est ce que la console montre.
+const COLUMNS = [
+  ["en-attente", "En attente"],
+  ["en-cours", "En cours"],
+  ["termine", "Terminé"],
+  ["bloque", "Bloqué"],
+  ["amelioration-continue", "Amélioration continue"],
+];
+// La colonne des terminés grossit sans fin. On montre les plus récents et on
+// déplie le reste : aucun fichier n'est déplacé, aucun ticket n'est archivé.
+const DONE_SHOWN = 10;
+
+const recent = (a, b) => (b.updated || "").localeCompare(a.updated || "") || b.id - a.id;
+
+function TicketCard({ t }) {
+  return html`
+    <article class="tk" title=${t.file}>
+      <div class="t">${t.title}</div>
+      <div class="meta">
+        <span class="n">#${t.id}</span>
+        ${t.service && html`<span class="tag">${t.service}</span>`}
+        ${t.priority && t.priority !== "normale"
+          && html`<span class=${`tag ${t.priority}`}>${t.priority}</span>`}
+      </div>
+    </article>`;
+}
+
+function KanbanTab({ tickets }) {
+  const [service, setService] = useState("*");
+  const [allDone, setAllDone] = useState(false);
+  const services = [...new Set(tickets.map((t) => t.service).filter(Boolean))].sort();
+  const visible = service === "*" ? tickets : tickets.filter((t) => t.service === service);
+
+  return html`
+    <main class="main kanban">
+      <header>
+        <div>
+          <h1>Kanban</h1>
+          <p>${tickets.length} tickets · le dossier <code>tickets/</code> à la racine du dépôt</p>
+        </div>
+        <span class="spacer"></span>
+        <div class="toolbar">
+          <select value=${service} onChange=${(e) => setService(e.target.value)}>
+            <option value="*">tous les services</option>
+            ${services.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
+          </select>
+        </div>
+      </header>
+
+      ${tickets.length === 0
+        ? html`<p class="empty">aucun ticket dans <code>tickets/</code>. Voir docs/agents/tickets.md.</p>`
+        : html`
+        <div class="cols">
+          ${COLUMNS.map(([status, libelle]) => {
+            const found = visible.filter((t) => t.status === status);
+            const done = status === "termine";
+            const shown = done ? [...found].sort(recent) : found;
+            const hidden = done && !allDone ? Math.max(0, shown.length - DONE_SHOWN) : 0;
+            return html`
+              <section key=${status} class=${`col ${status}`}>
+                <header>
+                  <span class="label">${libelle}</span>
+                  <span class="n">${found.length}</span>
+                </header>
+                <div class="stack">
+                  ${(hidden ? shown.slice(0, DONE_SHOWN) : shown).map((t) => html`
+                    <${TicketCard} key=${t.id} t=${t} />`)}
+                  ${hidden > 0 && html`
+                    <button class="more" onClick=${() => setAllDone(true)}>+${hidden} de plus</button>`}
+                  ${done && allDone && found.length > DONE_SHOWN && html`
+                    <button class="more" onClick=${() => setAllDone(false)}>replier</button>`}
+                </div>
+              </section>`;
+          })}
+        </div>`}
+    </main>`;
+}
+
 // ---------- app ----------
 
 function App() {
@@ -516,11 +597,13 @@ function App() {
   const [view, setView] = useState("grid");
   const [tab, setTab] = useState("services");
   const [chat, setChat] = useState([]);
+  const [tickets, setTickets] = useState([]);
   const [online, setOnline] = useState(false);
 
   useEffect(() => {
     // Le tampon du daemon existe avant l'ouverture de l'onglet: on le rattrape.
     fetch("/api/chat").then((r) => r.json()).then((d) => setChat(d.messages)).catch(() => {});
+    fetch("/api/tickets").then((r) => r.json()).then((d) => setTickets(d.tickets)).catch(() => {});
     const source = new EventSource("/api/stream");
     source.onopen = () => setOnline(true);
     source.onerror = () => setOnline(false);
@@ -538,6 +621,9 @@ function App() {
           next[at] = payload.message;
           return next;
         });
+      } else if (payload.type === "tickets") {
+        // Le daemon n'émet cet événement que lorsque le dossier a bougé.
+        setTickets(payload.tickets);
       } else if (payload.type === "log") {
         setLogs((prev) => {
           const next = [...(prev[payload.service] || []), payload.line];
@@ -587,6 +673,8 @@ function App() {
                   onClick=${() => setTab("services")}>Services</button>
           <button class=${`tab ${tab === "chat" ? "active" : ""}`}
                   onClick=${() => setTab("chat")}>Chat</button>
+          <button class=${`tab ${tab === "kanban" ? "active" : ""}`}
+                  onClick=${() => setTab("kanban")}>Kanban</button>
           <button class=${`tab ${tab === "config" ? "active" : ""}`}
                   onClick=${() => setTab("config")}>Config</button>
         </nav>
@@ -598,6 +686,7 @@ function App() {
       </div>
 
       ${tab === "config" ? html`<${ConfigTab} />`
+        : tab === "kanban" ? html`<${KanbanTab} tickets=${tickets} />`
         : tab === "chat" ? html`<${ChatTab} messages=${chat} connected=${(snap.chat || {}).connected} />`
         : html`
       <div class="body">

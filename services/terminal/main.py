@@ -27,6 +27,7 @@ from aiohttp.web_runner import GracefulExit
 from chat import Chat
 from metrics import BusMonitor, Sampler
 from supervisor import Manifest, Supervisor
+from tickets import Board
 
 VERSION = "0.1.0"
 HOST, PORT = "127.0.0.1", 7420
@@ -46,6 +47,7 @@ class Daemon:
         self.bus = BusMonitor(lambda: self.session)
         self.sampler = Sampler(self.supervisor, self.bus, SAMPLE_INTERVAL)
         self.chat = Chat(self._on_chat)
+        self.board = Board(ROOT / "tickets")
         self.started_at = time.time()
 
     # ---------- broadcast ----------
@@ -112,6 +114,10 @@ class Daemon:
             try:
                 await self.sampler.tick()
                 self._broadcast(self.snapshot())
+                # The tickets do not move at the rhythm of the services: they go
+                # out on their own event, and only when the folder changed.
+                if self.board.changed():
+                    self._broadcast(self.board.state())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # a sampling failure must not stop the daemon
@@ -164,6 +170,7 @@ async def api_stream(request: web.Request) -> web.StreamResponse:
     try:
         await response.write(b": ok\n\n")
         await response.write(f"data: {json.dumps(app_daemon.snapshot())}\n\n".encode())
+        await response.write(f"data: {json.dumps(app_daemon.board.state())}\n\n".encode())
         while True:
             try:
                 message = await asyncio.wait_for(queue.get(), 20.0)
@@ -223,6 +230,14 @@ async def api_profile_action(request: web.Request) -> web.Response:
     else:
         raise web.HTTPBadRequest(text=f"action inconnue : {action}")
     return web.json_response({"ok": True, "services": members})
+
+
+# ---------- tickets ----------
+
+
+@routes.get("/api/tickets")
+async def api_tickets_list(request: web.Request) -> web.Response:
+    return web.json_response(daemon(request).board.state())
 
 
 # ---------- chat ----------

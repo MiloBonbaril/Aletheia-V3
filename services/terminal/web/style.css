@@ -302,3 +302,48 @@ body.resizing { cursor: col-resize; user-select: none; }
 .composer textarea:focus { outline: none; border-color: var(--faint); }
 .composer textarea:disabled { opacity: .5; }
 .composer button { padding: 8px 18px; }
+
+/* ---------- kanban ---------- */
+
+.kanban .toolbar select {
+  font: inherit; color: inherit;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); padding: 4px 8px;
+}
+.kanban .toolbar select:focus { outline: none; border-color: var(--faint); }
+.kanban code { font: 11px var(--mono); color: var(--muted); }
+
+/* Cinq colonnes de front. Elles se serrent, puis la rangée glisse. */
+.cols { display: flex; gap: 10px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+.col {
+  flex: 1 1 0; min-width: 208px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 10px;
+}
+.col > header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 2px 9px; border-bottom: 1px solid var(--line-soft);
+}
+.col > header .label { flex: 1; }
+.col > header .n { font: 11px var(--mono); color: var(--faint); }
+.col.en-cours { border-color: var(--faint); }
+.col.bloque > header .label { color: var(--err); }
+.col.amelioration-continue > header .label { color: var(--busy); }
+
+.stack { display: flex; flex-direction: column; gap: 7px; padding-top: 9px; min-height: 34px; }
+
+.tk {
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); padding: 8px 9px;
+}
+.tk .t { font-size: 12px; line-height: 1.35; }
+.tk .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
+.tk .meta .n { font: 10px var(--mono); color: var(--faint); }
+.tag {
+  font: 10px var(--mono); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 4px;
+}
+.tag.haute { color: var(--err); border-color: var(--err); }
+.tag.basse { color: var(--faint); }
+
+.more { width: 100%; font-size: 11px; color: var(--muted); padding: 3px; }

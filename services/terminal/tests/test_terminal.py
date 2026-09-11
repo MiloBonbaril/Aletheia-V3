@@ -205,3 +205,134 @@ def test_envoyer_sans_bus_echoue_au_lieu_de_perdre_le_message():
     with pytest.raises(ConnectionError):
         asyncio.run(chat.send("coucou"))
     assert len(chat.messages) == 0
+
+
+# ---------- board ----------
+
+from tickets import Board, Ticket  # noqa: E402
+
+
+def _write(folder, name, text):
+    path = folder / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+TICKET = """---
+id: 7
+title: Voix plus naturelle sur les fins de phrase
+status: en-cours
+service: io_voix
+priority: haute
+created: 2026-09-11
+updated: 2026-09-12
+---
+
+Le corps, en Markdown libre.
+
+```markdown
+status: termine
+```
+"""
+
+
+def test_un_ticket_relu_puis_reecrit_rend_le_meme_texte(tmp_path):
+    """L'aller-retour est la seule preuve que la lecture n'a rien perdu."""
+    _write(tmp_path, "0007-voix.md", TICKET)
+    ticket = Board(tmp_path).tickets()[0]
+    assert ticket.to_text() == TICKET
+
+
+def test_le_board_lit_les_champs_du_frontmatter(tmp_path):
+    _write(tmp_path, "0007-voix.md", TICKET)
+    ticket = Board(tmp_path).tickets()[0]
+    assert ticket.id == 7
+    assert ticket.title == "Voix plus naturelle sur les fins de phrase"
+    assert ticket.status == "en-cours"
+    assert ticket.fields["service"] == "io_voix"
+    assert ticket.fields["priority"] == "haute"
+    # Le corps garde sa ligne `status:` citée: elle n'est pas du frontmatter.
+    assert "status: termine" in ticket.body
+
+
+def test_un_fichier_casse_est_ignore_sans_emporter_le_dossier(tmp_path, capsys):
+    _write(tmp_path, "0007-voix.md", TICKET)
+    _write(tmp_path, "0008-sans-frontmatter.md", "juste du texte\n")
+    _write(tmp_path, "0009-statut-inconnu.md", "---\nid: 9\ntitle: X\nstatus: fantome\ncreated: 2026-09-12\n---\n")
+    _write(tmp_path, "0010-sans-titre.md", "---\nid: 10\nstatus: en-attente\ncreated: 2026-09-12\n---\n")
+    board = Board(tmp_path)
+    assert [t.id for t in board.tickets()] == [7]
+    # Le daemon dit lesquels il a laissés de côté, sinon ils disparaissent en silence.
+    said = capsys.readouterr().out
+    for name in ("0008", "0009", "0010"):
+        assert name in said
+
+
+def test_les_tickets_sont_tries_par_priorite_puis_par_id(tmp_path):
+    def ticket(number, priority):
+        line = f"priority: {priority}\n" if priority else ""
+        _write(
+            tmp_path,
+            f"{number:04d}-t.md",
+            f"---\nid: {number}\ntitle: T{number}\nstatus: en-attente\n{line}"
+            f"created: 2026-09-12\nupdated: 2026-09-12\n---\n",
+        )
+
+    ticket(1, "normale")
+    ticket(2, "haute")
+    ticket(3, None)  # sans priorité: la même place que `normale`
+    ticket(4, "basse")
+    ticket(5, "haute")
+    assert [t.id for t in Board(tmp_path).tickets()] == [2, 5, 1, 3, 4]
+
+
+def test_deux_fichiers_qui_reclament_le_meme_id_ne_donnent_quun_ticket(tmp_path, capsys):
+    """Deux agents qui prennent « le plus grand id plus un » écrivent le même id."""
+    frontmatter = "---\nid: 12\ntitle: {}\nstatus: en-attente\ncreated: 2026-09-12\n---\n"
+    _write(tmp_path, "0012-premier.md", frontmatter.format("Premier"))
+    _write(tmp_path, "0012-second.md", frontmatter.format("Second"))
+    tickets = Board(tmp_path).tickets()
+    assert [t.title for t in tickets] == ["Premier"]
+    assert "0012-second.md" in capsys.readouterr().out
+
+
+def test_un_ticket_sans_updated_prend_sa_date_de_creation(tmp_path):
+    _write(
+        tmp_path,
+        "0011-t.md",
+        "---\nid: 11\ntitle: T\nstatus: en-attente\ncreated: 2026-09-01\n---\n",
+    )
+    ticket = Board(tmp_path).tickets()[0]
+    assert ticket.updated == "2026-09-01"
+
+
+def test_le_board_ne_signale_un_changement_que_lorsque_le_dossier_bouge(tmp_path):
+    board = Board(tmp_path)
+    assert board.changed() is True   # le premier appel doit servir l'état initial
+    assert board.changed() is False
+    _write(tmp_path, "0007-voix.md", TICKET)
+    assert board.changed() is True
+    assert board.changed() is False
+    (tmp_path / "0007-voix.md").unlink()
+    assert board.changed() is True
+
+
+def test_un_dossier_absent_donne_un_board_vide(tmp_path):
+    """Le dépôt peut ne pas avoir de dossier tickets/: le daemon démarre quand même."""
+    board = Board(tmp_path / "jamais-cree")
+    assert board.tickets() == []
+    assert board.state()["tickets"] == []
+
+
+def test_letat_du_board_est_serialisable_pour_la_console(tmp_path):
+    _write(tmp_path, "0007-voix.md", TICKET)
+    state = Board(tmp_path).state()
+    assert state["type"] == "tickets"
+    entry = state["tickets"][0]
+    assert entry["id"] == 7 and entry["status"] == "en-cours"
+    assert entry["service"] == "io_voix" and entry["priority"] == "haute"
+    assert entry["file"] == "0007-voix.md"
+    # L'empreinte de version voyage en chaîne: st_mtime_ns dépasse la précision
+    # entière du navigateur.
+    assert isinstance(entry["mtime"], str) and entry["mtime"]
+    _json.dumps(state)
