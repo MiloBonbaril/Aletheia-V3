@@ -2,6 +2,19 @@
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+## Two trackers, one job each
+
+This repo has a second board: the `tickets/` folder at its root, which the `Kanban` tab of
+`services/terminal` shows. The two do not hold the same thing.
+
+- **`tickets/`** holds the roadmap of the project: what waits, what runs, what is blocked, and the
+  permanent model watches. See `docs/agents/tickets.md`.
+- **GitHub Issues** stay the door for a report that comes from outside, and the place where a spec
+  or a set of agent tickets is published.
+
+**There is no synchronisation between the two, in any direction.** When you accept an external
+report, write a ticket by hand and put one line at the top of its body: `Origine : #42`.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.

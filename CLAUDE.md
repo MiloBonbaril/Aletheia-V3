@@ -201,10 +201,18 @@ This repository is public. Do not commit real conversation data. The history dum
 
 ## Agent skills
 
+### Project board
+
+The roadmap is the `tickets/` folder at the root of the repository: one Markdown file for each
+ticket, with a flat front matter. Read a ticket with `cat`, find one with `grep`, move one with a
+one line edit. The `Kanban` tab of `services/terminal` is a view on the same files. See
+`docs/agents/tickets.md`, and `docs/adr/0005-tickets-are-files-in-the-repository.md` for the reason.
+
 ### Issue tracker
 
-The issues are GitHub Issues on `MiloBonbaril/Aletheia-V3`. Use the `gh` CLI. See
-`docs/agents/issue-tracker.md`.
+The issues are GitHub Issues on `MiloBonbaril/Aletheia-V3`. Use the `gh` CLI. They are the door for
+a report that comes from outside; `tickets/` holds the roadmap. There is no synchronisation between
+the two. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
