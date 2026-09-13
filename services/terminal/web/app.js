@@ -709,6 +709,7 @@ function KanbanTab({ tickets, setTickets }) {
   const [which, setWhich] = useState("tickets");
   const [issues, setIssues] = useState(null);
   const [issuesError, setIssuesError] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [service, setService] = useState("*");
   const [allDone, setAllDone] = useState(false);
   const [note, setNote] = useState(null);
@@ -721,23 +722,27 @@ function KanbanTab({ tickets, setTickets }) {
 
   const replace = (ticket) => setTickets((prev) => prev.map((t) => (t.id === ticket.id ? ticket : t)));
 
+  // Le daemon garde le board quelques minutes: l'afficher ne relance `gh` que
+  // lorsque le cache a expiré, et `force` est ce que le bouton envoie.
+  const loadIssues = async (force) => {
+    setLoading(true);
+    try {
+      const response = await fetch(force ? "/api/issues?force=1" : "/api/issues");
+      const state = await response.json();
+      setIssues(state);
+      setIssuesError(state.error || null);
+    } catch {
+      // Un échec n'efface rien: les issues déjà lues restent à l'écran. Sans
+      // board de repli, le corps resterait sur "chargement…" pour toujours.
+      setIssues((prev) => prev || { type: "issues", columns: [], total: 0, checked: null });
+      setIssuesError("le daemon ne répond pas");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (which !== "issues") return;
-    let alive = true;
-    fetch("/api/issues")
-      .then((r) => r.json())
-      .then((s) => {
-        if (!alive) return;
-        setIssues(s);
-        setIssuesError(s.error || null);
-      })
-      .catch(() => {
-        if (!alive) return;
-        // Sans board vide, le corps resterait sur "chargement…" pour toujours.
-        setIssues({ type: "issues", columns: [], total: 0 });
-        setIssuesError("le daemon ne répond pas");
-      });
-    return () => { alive = false; };
+    if (which === "issues") loadIssues(false);
   }, [which]);
 
   // Le board donne l'identifiant, la date et le nom du fichier. Le ticket naît
@@ -810,13 +815,17 @@ function KanbanTab({ tickets, setTickets }) {
         <div>
           <h1>Kanban</h1>
           ${which === "issues"
-            ? html`<p>${issues ? issues.total : "…"} issues · le dépôt sur GitHub, en lecture seule</p>`
+            ? html`<p>${issues ? issues.total : "…"} issues · lu à ${(issues && issues.checked) || "—"}
+                      · le dépôt sur GitHub, en lecture seule</p>`
             : html`<p>${tickets.length} tickets · le dossier <code>tickets/</code> à la racine du dépôt</p>`}
         </div>
         <span class="spacer"></span>
         <div class="toolbar">
           ${which === "issues"
-            ? issuesError && html`<span class="tknote err">${issuesError}</span>`
+            ? html`
+              ${loading && html`<span class="tknote">lecture de GitHub…</span>`}
+              ${issuesError && html`<span class="tknote err">${issuesError}</span>`}
+              <button onClick=${() => loadIssues(true)} disabled=${loading}>rafraîchir</button>`
             : note && html`<span class=${`tknote ${note.kind}`}>${note.text}</span>`}
           <div class="boards">
             <button class=${which === "tickets" ? "on" : ""}

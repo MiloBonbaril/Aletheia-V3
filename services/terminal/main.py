@@ -25,9 +25,7 @@ from aiohttp import web
 from aiohttp.web_runner import GracefulExit
 
 from chat import Chat
-from issues import Unavailable
-from issues import board as issues_board
-from issues import fetch as issues_fetch
+from issues import Issues
 from metrics import BusMonitor, Sampler
 from supervisor import Manifest, Supervisor
 from tickets import Board, Conflict
@@ -51,6 +49,7 @@ class Daemon:
         self.sampler = Sampler(self.supervisor, self.bus, SAMPLE_INTERVAL)
         self.chat = Chat(self._on_chat)
         self.board = Board(ROOT / "tickets")
+        self.issues = Issues(ROOT)
         self.started_at = time.time()
 
     # ---------- broadcast ----------
@@ -319,16 +318,13 @@ async def api_issues(request: web.Request) -> web.Response:
     C'est la seule route de ce board, et elle lit. Aucune route d'écriture ne
     l'accompagne: même un client hostile sur 127.0.0.1 ne peut rien écrire sur
     GitHub par ce chemin.
+
+    `?force` saute le cache: c'est ce que le bouton « rafraîchir » envoie. La
+    réponse porte toujours un board, l'heure du dernier succès et, s'il y a eu
+    une panne, sa raison.
     """
-    try:
-        raw = await issues_fetch(ROOT)
-    except Unavailable as exc:
-        # Un board vide ressemblerait à un dépôt sans issue. La console dit
-        # pourquoi elle ne montre rien.
-        state = issues_board([])
-        state["error"] = str(exc)
-        return web.json_response(state)
-    return web.json_response(issues_board(raw))
+    force = "force" in request.query
+    return web.json_response(await daemon(request).issues.state(force=force))
 
 
 # ---------- chat ----------

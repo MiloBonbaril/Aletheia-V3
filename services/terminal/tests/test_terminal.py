@@ -673,3 +673,179 @@ def test_chaque_colonne_porte_son_libelle_accentue():
     libelles = [c["label"] for c in board([])["columns"]]
     assert libelles == ["À trier", "Info manquante", "Prêt agent", "Prêt humain", "Fermées"]
     assert len(COLUMNS) == 5
+
+
+# ---------- board des issues: cache et échecs ----------
+
+import asyncio  # noqa: E402
+import re  # noqa: E402
+
+import issues as issues_module  # noqa: E402
+from issues import MISSING, MUTE, UNAUTHORIZED, Issues, Unavailable, explain  # noqa: E402
+
+
+class _Gh:
+    """Un `gh` de laboratoire: il compte ses appels et obéit au scénario."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = 0
+
+    async def __call__(self, cwd):
+        self.calls += 1
+        answer = self.answers[min(self.calls - 1, len(self.answers) - 1)]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_gh_qui_demande_une_authentification_donne_son_propre_message():
+    texte = "To get started with GitHub CLI, please run:  gh auth login"
+    assert explain(texte) == UNAUTHORIZED
+
+
+def test_une_autre_panne_de_gh_garde_ce_que_gh_a_dit():
+    message = explain("dial tcp: lookup api.github.com: no such host")
+    assert message != UNAUTHORIZED and "no such host" in message
+
+
+def test_gh_absent_de_la_machine_donne_le_message_qui_le_dit(monkeypatch):
+    async def pas_de_gh(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(issues_module.asyncio, "create_subprocess_exec", pas_de_gh)
+    with pytest.raises(Unavailable) as levee:
+        _run(issues_module.fetch("."))
+    assert str(levee.value) == MISSING
+
+
+def test_un_second_affichage_dans_la_fenetre_ne_relance_pas_gh():
+    gh = _Gh([])
+    board_issues = Issues(".", call=gh)
+    _run(board_issues.state())
+    _run(board_issues.state())
+    assert gh.calls == 1
+
+
+def test_rafraichir_relance_gh_meme_quand_le_cache_est_valide():
+    gh = _Gh([])
+    board_issues = Issues(".", call=gh)
+    _run(board_issues.state())
+    _run(board_issues.state(force=True))
+    assert gh.calls == 2
+
+
+def test_le_cache_perime_relance_gh():
+    horloge = [0.0]
+    gh = _Gh([])
+    board_issues = Issues(".", ttl=300, call=gh, clock=lambda: horloge[0])
+    _run(board_issues.state())
+    horloge[0] = 301.0
+    _run(board_issues.state())
+    assert gh.calls == 2
+
+
+def test_un_appel_rate_garde_le_board_precedent_et_ajoute_le_message():
+    gh = _Gh([_issue(1)], Unavailable("le réseau est coupé"))
+    board_issues = Issues(".", call=gh)
+    _run(board_issues.state())
+    apres = _run(board_issues.state(force=True))
+    assert apres["total"] == 1                       # les issues restent à l'écran
+    assert apres["error"] == "le réseau est coupé"
+    assert _where(apres, 1) == "a-trier"
+
+
+def test_un_appel_rate_ne_remplace_pas_le_cache():
+    gh = _Gh([_issue(1)], Unavailable("panne"), Unavailable("panne"))
+    board_issues = Issues(".", call=gh)
+    premier = _run(board_issues.state())
+    _run(board_issues.state(force=True))
+    assert _run(board_issues.state())["columns"] == premier["columns"]
+
+
+def test_un_echec_des_le_premier_appel_donne_un_board_vide_et_le_message():
+    board_issues = Issues(".", call=_Gh(Unavailable(MISSING)))
+    etat = _run(board_issues.state())
+    assert etat["total"] == 0
+    assert etat["error"] == MISSING
+    assert etat["checked"] is None                   # aucun succès à dater
+    assert len(etat["columns"]) == 5                 # le board garde sa forme
+
+
+def test_un_succes_date_la_lecture_et_efface_le_message():
+    gh = _Gh(Unavailable("panne"), [_issue(1)])
+    board_issues = Issues(".", call=gh)
+    _run(board_issues.state())
+    etat = _run(board_issues.state(force=True))
+    assert etat["error"] is None
+    assert re.fullmatch(r"\d{2}:\d{2}", etat["checked"])
+
+
+def test_lheure_du_dernier_succes_survit_a_un_echec():
+    gh = _Gh([_issue(1)], Unavailable("panne"))
+    board_issues = Issues(".", call=gh)
+    heure = _run(board_issues.state())["checked"]
+    assert _run(board_issues.state(force=True))["checked"] == heure
+
+
+def test_deux_affichages_simultanes_ne_lancent_quun_seul_gh():
+    """Sans verrou, ouvrir deux onglets lance deux sous-processus pour rien."""
+    gh = _Gh([])
+    board_issues = Issues(".", call=gh)
+
+    async def les_deux():
+        await asyncio.gather(board_issues.state(), board_issues.state())
+
+    _run(les_deux())
+    assert gh.calls == 1
+
+
+def test_letat_du_cache_est_serialisable_pour_la_console():
+    import json
+
+    etat = _run(Issues(".", call=_Gh([_issue(1)])).state())
+    assert json.loads(json.dumps(etat)) == etat
+
+
+def test_un_gh_qui_echoue_sans_rien_dire_a_quand_meme_un_message():
+    assert explain("") == MUTE
+
+
+def test_une_panne_ne_relance_pas_gh_a_chaque_affichage():
+    """Sinon chaque aller-retour redemande à un GitHub qui vient de refuser."""
+    gh = _Gh(Unavailable("panne"))
+    board_issues = Issues(".", call=gh)
+    _run(board_issues.state())
+    _run(board_issues.state())
+    _run(board_issues.state())
+    assert gh.calls == 1
+
+
+def test_rafraichir_passe_outre_la_pause_qui_suit_une_panne():
+    gh = _Gh(Unavailable("panne"))
+    board_issues = Issues(".", call=gh)
+    _run(board_issues.state())
+    _run(board_issues.state(force=True))
+    assert gh.calls == 2
+
+
+def test_la_pause_qui_suit_une_panne_finit_par_expirer():
+    horloge = [0.0]
+    gh = _Gh(Unavailable("panne"))
+    board_issues = Issues(".", call=gh, clock=lambda: horloge[0])
+    _run(board_issues.state())
+    horloge[0] = 31.0
+    _run(board_issues.state())
+    assert gh.calls == 2
+
+
+def test_un_succes_leve_la_pause():
+    gh = _Gh(Unavailable("panne"), [_issue(1)], [_issue(1), _issue(2)])
+    board_issues = Issues(".", ttl=0, call=gh)
+    _run(board_issues.state())                       # panne
+    _run(board_issues.state(force=True))             # succès: la pause tombe
+    assert _run(board_issues.state())["total"] == 2  # l'appel suivant repart
