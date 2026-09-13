@@ -15,6 +15,12 @@ This repo has a second board: the `tickets/` folder at its root, which the `Kanb
 **There is no synchronisation between the two, in any direction.** When you accept an external
 report, write a ticket by hand and put one line at the top of its body: `Origine : #42`.
 
+The `Kanban` tab of the console shows the two boards, but it writes only one. The `Tickets` board
+reads and writes the files of `tickets/`. The `Issues` board is a window: it reads the GitHub
+issues and shows them in a column for each triage state, and it writes nothing. No button of the
+console closes an issue, applies a label, or copies an issue into `tickets/`. Use the `gh` CLI for
+each of these operations. See `docs/agents/triage-labels.md` for the column that each label gives.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.

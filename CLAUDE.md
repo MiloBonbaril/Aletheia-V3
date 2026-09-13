@@ -214,10 +214,16 @@ The issues are GitHub Issues on `MiloBonbaril/Aletheia-V3`. Use the `gh` CLI. Th
 a report that comes from outside; `tickets/` holds the roadmap. There is no synchronisation between
 the two. See `docs/agents/issue-tracker.md`.
 
+The `Issues` board of the `services/terminal` console is a window on GitHub. It reads the issues
+and shows them in a column for each triage state. It writes nothing: it does not close an issue, it
+does not apply a label, and it does not copy an issue into `tickets/`. To change an issue, use the
+`gh` CLI.
+
 ### Triage labels
 
-The default label set is `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`,
-`wontfix`. See `docs/agents/triage-labels.md`.
+The label set is `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. There is no
+`needs-triage` label: an open issue with no triage label is an issue to triage. Do not create one.
+See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
