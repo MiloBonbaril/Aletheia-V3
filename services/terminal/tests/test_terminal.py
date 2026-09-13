@@ -528,3 +528,148 @@ def test_vider_un_champ_optionnel_enleve_la_ligne_du_frontmatter(tmp_path):
 def test_un_champ_optionnel_vide_nest_pas_ecrit_a_la_creation(tmp_path):
     ticket = Board(tmp_path).create({"title": "T", "service": "", "priority": ""})
     assert "service:" not in ticket.path.read_text(encoding="utf-8")
+
+
+# ---------- board des issues GitHub ----------
+
+from issues import COLUMNS, board  # noqa: E402
+
+
+def _issue(number, *, state="OPEN", labels=(), updated="2026-09-01T10:00:00Z", title=None):
+    """Une issue telle que `gh issue list --json ...` l'imprime."""
+    return {
+        "number": number,
+        "title": title or f"issue {number}",
+        "state": state,
+        "labels": [{"name": name} for name in labels],
+        "updatedAt": updated,
+        "url": f"https://github.com/MiloBonbaril/Aletheia-V3/issues/{number}",
+    }
+
+
+def _column(state, key):
+    return next(c for c in state["columns"] if c["key"] == key)
+
+
+def _where(state, number):
+    """La clé de la colonne où la carte se trouve, ou la liste s'il y en a plusieurs."""
+    found = [c["key"] for c in state["columns"] if any(i["number"] == number for i in c["issues"])]
+    return found[0] if len(found) == 1 else found
+
+
+def test_les_colonnes_sont_les_cinq_etats_de_triage_dans_lordre():
+    keys = [c["key"] for c in board([])["columns"]]
+    assert keys == ["a-trier", "info-manquante", "pret-agent", "pret-humain", "fermees"]
+
+
+def test_une_liste_vide_donne_cinq_colonnes_vides_et_pas_une_erreur():
+    state = board([])
+    assert state["total"] == 0
+    assert all(c["issues"] == [] for c in state["columns"])
+
+
+def test_une_issue_ouverte_sans_label_de_triage_tombe_a_trier():
+    """L'absence de label est l'état de triage: la colonne se remplit toute seule."""
+    state = board([_issue(1), _issue(2, labels=["bug", "enhancement"])])
+    assert _where(state, 1) == "a-trier"
+    assert _where(state, 2) == "a-trier"
+
+
+@pytest.mark.parametrize(
+    "label,colonne",
+    [
+        ("needs-info", "info-manquante"),
+        ("ready-for-agent", "pret-agent"),
+        ("ready-for-human", "pret-humain"),
+    ],
+)
+def test_une_issue_ouverte_tombe_dans_la_colonne_de_son_label(label, colonne):
+    assert _where(board([_issue(1, labels=[label])]), 1) == colonne
+
+
+def test_deux_labels_de_triage_donnent_la_premiere_colonne_qui_correspond():
+    """Une issue qui attend le rapporteur est bloquée, quoi qu'en dise l'autre label."""
+    state = board([_issue(1, labels=["ready-for-agent", "needs-info"])])
+    assert _where(state, 1) == "info-manquante"
+
+
+def test_une_carte_napparait_que_dans_une_seule_colonne():
+    issues = [_issue(1, labels=["ready-for-agent", "needs-info", "ready-for-human"])]
+    places = [c["key"] for c in board(issues)["columns"] if c["issues"]]
+    assert len(places) == 1
+
+
+def test_une_issue_fermee_va_dans_fermees_meme_avec_un_label_de_triage():
+    state = board([_issue(1, state="CLOSED", labels=["ready-for-agent"])])
+    assert _where(state, 1) == "fermees"
+
+
+def test_une_issue_wontfix_ouverte_na_pas_de_traitement_particulier():
+    """`wontfix` n'a pas de colonne: elle finit fermée, et sa pastille le dit."""
+    state = board([_issue(1, labels=["wontfix"])])
+    assert _where(state, 1) == "a-trier"
+    assert _column(state, "a-trier")["issues"][0]["labels"] == ["wontfix"]
+
+
+def test_la_somme_des_colonnes_vaut_le_nombre_dissues_recues():
+    issues = [
+        _issue(1),
+        _issue(2, labels=["needs-info"]),
+        _issue(3, labels=["ready-for-agent"]),
+        _issue(4, labels=["ready-for-human"]),
+        _issue(5, state="CLOSED"),
+        _issue(6, state="CLOSED", labels=["wontfix"]),
+    ]
+    state = board(issues)
+    assert sum(len(c["issues"]) for c in state["columns"]) == 6
+    assert state["total"] == 6
+
+
+def test_les_cartes_dune_colonne_vont_de_la_plus_recente_a_la_plus_ancienne():
+    issues = [
+        _issue(1, updated="2026-01-01T00:00:00Z"),
+        _issue(2, updated="2026-09-13T00:00:00Z"),
+        _issue(3, updated="2026-05-05T00:00:00Z"),
+    ]
+    assert [i["number"] for i in _column(board(issues), "a-trier")["issues"]] == [2, 3, 1]
+
+
+def test_les_labels_de_triage_ne_sont_pas_des_pastilles_les_autres_si():
+    state = board([_issue(1, labels=["bug", "needs-info", "documentation"])])
+    assert _column(state, "info-manquante")["issues"][0]["labels"] == ["bug", "documentation"]
+
+
+def test_une_carte_porte_le_numero_le_titre_lurl_et_la_date():
+    state = board([_issue(7, title="le bus tombe", updated="2026-09-13T18:58:39Z")])
+    carte = _column(state, "a-trier")["issues"][0]
+    assert carte["number"] == 7
+    assert carte["title"] == "le bus tombe"
+    assert carte["url"].endswith("/issues/7")
+    assert carte["updated"] == "2026-09-13"  # la date suffit, l'heure est du bruit
+    assert carte["closed"] is False
+
+
+def test_un_champ_absent_ne_fait_pas_tomber_le_board():
+    """`gh` change, une clé disparaît: le board montre ce qu'il a."""
+    state = board([{"number": 1}, {}, _issue(2)])
+    assert state["total"] == 3
+    assert sum(len(c["issues"]) for c in state["columns"]) == 3
+
+
+def test_une_entree_qui_nest_pas_un_objet_est_ignoree():
+    state = board([_issue(1), "texte", None, 17])
+    assert state["total"] == 1
+
+
+def test_letat_du_board_est_serialisable_pour_la_console():
+    import json
+
+    state = board([_issue(1, labels=["bug"]), _issue(2, state="CLOSED")])
+    assert json.loads(json.dumps(state)) == state
+    assert state["type"] == "issues"
+
+
+def test_chaque_colonne_porte_son_libelle_accentue():
+    libelles = [c["label"] for c in board([])["columns"]]
+    assert libelles == ["À trier", "Info manquante", "Prêt agent", "Prêt humain", "Fermées"]
+    assert len(COLUMNS) == 5

@@ -354,6 +354,26 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tknote.warn { color: var(--warn); }
 .tknote.err { color: var(--err); }
 
+/* Le board des issues GitHub partage les colonnes, la pile et les cartes du
+   board des tickets. Seules ses différences vivent ici. */
+.boards { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.boards button { font-size: 11px; color: var(--muted); padding: 3px 10px; border: none; background: none; }
+.boards button.on { color: var(--ink); background: var(--line-soft); }
+
+/* Une carte d'issue est un lien: elle perd la couleur et le soulignement d'un
+   lien, et la main de saisie d'une carte de ticket. Rien ne se glisse ici. */
+.tk.issue { display: block; color: inherit; text-decoration: none; cursor: pointer; }
+.tk.issue:hover { border-color: var(--faint); }
+.tk.issue .num { font: 10px var(--mono); color: var(--faint); margin-right: 4px; }
+.tk.issue .when { font: 10px var(--mono); color: var(--faint); }
+.tk .meta .spacer { flex: 1; }
+.tk.issue.closed { opacity: 0.55; }
+.tk.issue.closed .t { text-decoration: line-through; }
+
+.col.info-manquante > header .label { color: var(--warn); }
+.col.pret-agent > header .label { color: var(--ok); }
+.col.fermees > header .label { color: var(--faint); }
+
 .tkedit {
   flex: none; width: 400px; max-width: 46vw;
   display: flex; flex-direction: column; min-height: 0;

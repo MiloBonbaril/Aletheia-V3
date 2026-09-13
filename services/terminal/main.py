@@ -25,6 +25,9 @@ from aiohttp import web
 from aiohttp.web_runner import GracefulExit
 
 from chat import Chat
+from issues import Unavailable
+from issues import board as issues_board
+from issues import fetch as issues_fetch
 from metrics import BusMonitor, Sampler
 from supervisor import Manifest, Supervisor
 from tickets import Board, Conflict
@@ -304,6 +307,28 @@ async def api_ticket_delete(request: web.Request) -> web.Response:
     _, mtime, _ = await _ticket_request(request)
     _board_call(daemon(request).board.delete, int_id(request), mtime)
     return web.json_response({"ok": True})
+
+
+# ---------- issues github ----------
+
+
+@routes.get("/api/issues")
+async def api_issues(request: web.Request) -> web.Response:
+    """Le board des issues GitHub, en lecture.
+
+    C'est la seule route de ce board, et elle lit. Aucune route d'écriture ne
+    l'accompagne: même un client hostile sur 127.0.0.1 ne peut rien écrire sur
+    GitHub par ce chemin.
+    """
+    try:
+        raw = await issues_fetch(ROOT)
+    except Unavailable as exc:
+        # Un board vide ressemblerait à un dépôt sans issue. La console dit
+        # pourquoi elle ne montre rien.
+        state = issues_board([])
+        state["error"] = str(exc)
+        return web.json_response(state)
+    return web.json_response(issues_board(raw))
 
 
 # ---------- chat ----------

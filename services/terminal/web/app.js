@@ -660,7 +660,55 @@ function TicketPanel({ t, onClose, onSaved, onDeleted }) {
     </aside>`;
 }
 
+// Une carte d'issue est un lien, pas un article cliquable: le seul endroit où
+// l'on peut agir sur une issue est github.com. `draggable=false` parce qu'un
+// navigateur laisse glisser un lien par défaut, et que ce board n'écrit rien.
+function IssueCard({ i }) {
+  return html`
+    <a class=${`tk issue ${i.closed ? "closed" : ""}`} href=${i.url} draggable=${false}
+       target="_blank" rel="noreferrer" title=${`#${i.number} · ouvrir sur github.com`}>
+      <div class="t"><span class="num">#${i.number}</span> ${i.title}</div>
+      <div class="meta">
+        ${i.labels.map((l) => html`<span key=${l} class="tag">${l}</span>`)}
+        <span class="spacer"></span>
+        <span class="when">${i.updated}</span>
+      </div>
+    </a>`;
+}
+
+// Les colonnes arrivent du daemon avec leur clé, leur libellé et leurs cartes:
+// le classement par label de triage est une décision, elle vit côté Python.
+// La colonne des fermées suit la règle de la colonne Terminé du board Tickets.
+function IssuesColumns({ state }) {
+  const [allClosed, setAllClosed] = useState(false);
+  return html`
+    <div class="cols">
+      ${state.columns.map((c) => {
+        const last = c.key === "fermees";
+        const hidden = last && !allClosed ? Math.max(0, c.issues.length - DONE_SHOWN) : 0;
+        return html`
+          <section key=${c.key} class=${`col ${c.key}`}>
+            <header>
+              <span class="label">${c.label}</span>
+              <span class="n">${c.issues.length}</span>
+            </header>
+            <div class="stack">
+              ${(hidden ? c.issues.slice(0, DONE_SHOWN) : c.issues).map(
+                (i, n) => html`<${IssueCard} key=${i.number ? `#${i.number}` : `?${n}`} i=${i} />`)}
+              ${hidden > 0 && html`
+                <button class="more" onClick=${() => setAllClosed(true)}>+${hidden} de plus</button>`}
+              ${last && allClosed && c.issues.length > DONE_SHOWN && html`
+                <button class="more" onClick=${() => setAllClosed(false)}>replier</button>`}
+            </div>
+          </section>`;
+      })}
+    </div>`;
+}
+
 function KanbanTab({ tickets, setTickets }) {
+  const [which, setWhich] = useState("tickets");
+  const [issues, setIssues] = useState(null);
+  const [issuesError, setIssuesError] = useState(null);
   const [service, setService] = useState("*");
   const [allDone, setAllDone] = useState(false);
   const [note, setNote] = useState(null);
@@ -672,6 +720,25 @@ function KanbanTab({ tickets, setTickets }) {
   const visible = service === "*" ? tickets : tickets.filter((t) => t.service === service);
 
   const replace = (ticket) => setTickets((prev) => prev.map((t) => (t.id === ticket.id ? ticket : t)));
+
+  useEffect(() => {
+    if (which !== "issues") return;
+    let alive = true;
+    fetch("/api/issues")
+      .then((r) => r.json())
+      .then((s) => {
+        if (!alive) return;
+        setIssues(s);
+        setIssuesError(s.error || null);
+      })
+      .catch(() => {
+        if (!alive) return;
+        // Sans board vide, le corps resterait sur "chargement…" pour toujours.
+        setIssues({ type: "issues", columns: [], total: 0 });
+        setIssuesError("le daemon ne répond pas");
+      });
+    return () => { alive = false; };
+  }, [which]);
 
   // Le board donne l'identifiant, la date et le nom du fichier. Le ticket naît
   // avec un titre d'attente, et le panneau s'ouvre pour l'écrire: pas de boîte
@@ -742,20 +809,37 @@ function KanbanTab({ tickets, setTickets }) {
       <header>
         <div>
           <h1>Kanban</h1>
-          <p>${tickets.length} tickets · le dossier <code>tickets/</code> à la racine du dépôt</p>
+          ${which === "issues"
+            ? html`<p>${issues ? issues.total : "…"} issues · le dépôt sur GitHub, en lecture seule</p>`
+            : html`<p>${tickets.length} tickets · le dossier <code>tickets/</code> à la racine du dépôt</p>`}
         </div>
         <span class="spacer"></span>
         <div class="toolbar">
-          ${note && html`<span class=${`tknote ${note.kind}`}>${note.text}</span>`}
-          <select value=${service} onChange=${(e) => setService(e.target.value)}>
-            <option value="*">tous les services</option>
-            ${services.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
-          </select>
-          <button class="primary" onClick=${create}>+ Ticket</button>
+          ${which === "issues"
+            ? issuesError && html`<span class="tknote err">${issuesError}</span>`
+            : note && html`<span class=${`tknote ${note.kind}`}>${note.text}</span>`}
+          <div class="boards">
+            <button class=${which === "tickets" ? "on" : ""}
+                    onClick=${() => setWhich("tickets")}>Tickets</button>
+            <button class=${which === "issues" ? "on" : ""}
+                    onClick=${() => setWhich("issues")}>Issues</button>
+          </div>
+          ${which === "tickets" && html`
+            <select value=${service} onChange=${(e) => setService(e.target.value)}>
+              <option value="*">tous les services</option>
+              ${services.map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
+            </select>
+            <button class="primary" onClick=${create}>+ Ticket</button>`}
         </div>
       </header>
 
-      ${tickets.length === 0
+      ${which === "issues"
+        ? (!issues
+            ? html`<p class="empty">chargement des issues…</p>`
+            : issuesError && issues.total === 0
+              ? html`<p class="empty">${issuesError}</p>`
+              : html`<${IssuesColumns} state=${issues} />`)
+        : tickets.length === 0
         ? html`<p class="empty">aucun ticket dans <code>tickets/</code>. Voir docs/agents/tickets.md.</p>`
         : html`
         <div class="cols">
@@ -786,7 +870,7 @@ function KanbanTab({ tickets, setTickets }) {
           })}
         </div>`}
     </main>
-    ${open && html`
+    ${which === "tickets" && open && html`
       <${TicketPanel} key=${open.id} t=${open} onClose=${() => setOpenId(null)}
                       onSaved=${replace}
                       onDeleted=${(id) => {
