@@ -18,7 +18,8 @@ to first token below 200 ms, on consumer hardware. Measure each latency-sensitiv
 `services/benchmark`. Do not measure by hand.
 
 The services communicate only through a central **NATS** bus. It is fire-and-forget publish and
-subscribe, plus request-reply for four topics. There is no direct call between two services.
+subscribe, plus request-reply for three topics (`hippocampe.rag.query`, `hippocampe.rag.add`,
+`lobe.topic.generate`). There is no direct call between two services.
 
 Read `NATS_TOPICS.md` for the full topic and payload contract, and `PROMPTING.md` for the XML schema
 of the system prompt, before you change a flow between services. `CONCEPT.md` gives the architecture
@@ -32,7 +33,8 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   ingress topics (`io.user.msg.text`, `io.user.speak`, `io.user.speak.raw`,
   `limbic.proactive.trigger`), dispatches `cortex.prompt` and `hippocampe.context.build` in
   parallel, publishes `cortex.interaction.started`, and tracks the sessions with `correlation_id`
-  and `session_id`.
+  and `session_id`. It also listens to `lobe.fragment_stream` to close a session. The sessions are
+  in memory only.
 - **lobe_frontal** (`services/lobe_frontal`, Python) — the LLM engine. It waits for
   `hippocampe.context.ready` before the inference. It builds the XML system prompt with
   `src/prompt_builder.py`. It cuts the answer at punctuation marks and streams the fragments on
@@ -62,9 +64,11 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   boredom gauge that starts a proactive interaction (`limbic.proactive.trigger`) behind a presence
   gate and a time gate. It asks the lobe_frontal for the subject.
 - **io_oreilles** (Rust) — STT: microphone capture → Silero VAD → CTranslate2 and Whisper →
-  `io.user.speak`. With `--discord`, it processes the per-speaker PCM audio from `io_discord`
-  instead of the local microphone. The GPU build (`--features cuda`) is necessary for real-time
-  speech.
+  `io.user.speak`. The default model is `whisper-large-v3-turbo` (`model/whisper-large-turbo-ct2`,
+  `INT8_FLOAT16`), and the default language is `fr`: the language detection costs 79 ms more for
+  each segment. With `--discord`, it processes the per-speaker PCM audio from `io_discord` instead
+  of the local microphone. The GPU build (`--features cuda`) is necessary for real-time speech.
+  `src/bin/bench_stt.rs` measures the STT alone. See `docs/audits/io_oreilles-2026-09-07.md`.
 - **io_voix** (Python) — TTS with Audio8 TTS Preview 0.6B on the GPU (torch, INT8 weight-only). It
   consumes `lobe.fragment_stream`. It publishes the audio on `io.voice.speak.audio`, and the time
   references on `io.voice.speak.start` and `.end`. It downloads the model (approximately 1.3 GB)
@@ -88,7 +92,13 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `127.0.0.1:7420`. It starts, stops, rebuilds and monitors each service, and it keeps a buffer of
   2000 log lines for each one in memory. `services.toml` is the manifest: it declares the command,
   the group, the start order, the named profiles and the text files that the `Config` tab edits.
-  That tab writes the three prompt files of `lobe_frontal`. The daemon kills every service when it
+  The console has four tabs: `Services`, `Chat`, `Kanban` and `Config`. The `Config` tab writes the
+  three prompt files of `lobe_frontal`. The `Kanban` tab has two boards: `Tickets` reads and writes
+  the `tickets/` folder, and `Issues` reads the GitHub issues through `gh`. Some manifest entries
+  come in pairs that must never run together, because they share a device or a port:
+  `io_oreilles` / `io_oreilles_discord`, `io_voix` / `io_voix_muet`, and `llama-server` /
+  `llama-server-qwen` (port 8080). `tests/test_terminal.py` checks the profiles against these
+  pairs. The daemon kills every service when it
   stops, and it never restarts a crashed one. It reads the bus figures through the monitoring
   endpoint of NATS (`/varz`, `/connz`), never through a subscription. A `Chat` tab does the work of
   `io_text` from the browser: it is the only part that touches the bus, and it uses two topics only
@@ -158,7 +168,8 @@ docker compose down
 ### Tests
 
 There is no repository-level test runner, no linter and no formatter. Some services have their own
-tests, and they cover the pure functions only:
+tests, and they cover the pure functions only. `benchmark`, `io_text` and `io_oreilles` have no
+Python test; the Rust tests of `io_oreilles` are in `src/`:
 
 ```bash
 cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
@@ -174,13 +185,15 @@ Each service reads its own `.env` file. The Python services use `python-dotenv`.
 the address `nats://localhost:4222` in their source code.
 
 - lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`
-- hippocampe: `POSTGRES_URL`, `QDRANT_URL`, `QDRANT_PORT`, `RAG_SCORE_THRESHOLD`
+- hippocampe: `POSTGRES_URL`, `QDRANT_URL`, `QDRANT_PORT`, `RAG_SCORE_THRESHOLD`. The
+  `export_data.py` and `import_data.py` scripts read `POSTGRES_HOST`, `POSTGRES_PORT`,
+  `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` instead of `POSTGRES_URL`.
 - limbic: `MOOD_DECAY_RATE`, `TICK_INTERVAL_SECONDS`, `BOREDOM_INCREMENT_RATE`, `BOREDOM_THRESHOLD`,
   `PROACTIVE_GATE_START_HOUR`, `PROACTIVE_GATE_END_HOUR`
 - io_discord: `DISCORD_TOKEN`, `DISCORD_USER_ID`, `DISCORD_GUILD_ID`, `TEXT_CHANNEL_ID`,
   `COMMAND_PREFIX`
 - io_voix: `A8_QUANT`, `A8_VOICE_WAV`, `A8_VOICE_TEXT`, `A8_CHUNK_SCHEDULE`, `A8_MODEL_DIR`,
-  `MUTE_LOCAL_PLAYBACK`
+  `A8_TEMPERATURE`, `A8_TOP_P`, `A8_TOP_K`, `A8_MAX_FRAMES`, `MUTE_LOCAL_PLAYBACK`
 - io_oreilles: `STT_LANGUAGE`, `STT_MODEL_PATH`, `RAW_AUDIO`, `ORT_DYLIB_PATH`
 
 ## Work between services
@@ -200,6 +213,16 @@ This repository is public. Do not commit real conversation data. The history dum
 (`services/lobe_frontal/eval/results/`) are in `.gitignore`. Keep them there.
 
 ## Agent skills
+
+`CLAUDE.md` is the copy of this file for Claude Code. When you change this file, make the same
+change in `CLAUDE.md`. The skills follow the same rule: `.agents/skills/` and `.claude/skills/` hold
+the same skills. Only the name of the guidance file changes between the two copies.
+
+### Audit
+
+`/audit <subject>` is a read-only audit of one service, one feature or one contract. The user
+starts it. It never changes the working tree. It writes one report to
+`docs/audits/<subject>-<YYYY-MM-DD>.md`. See `.agents/skills/audit/SKILL.md`.
 
 ### Project board
 

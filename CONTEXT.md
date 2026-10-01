@@ -74,3 +74,16 @@ _Avoid_: managed process, unit, target
 A named subset of managed services in `services/terminal/services.toml`. The daemon starts a profile
 in the order of the manifest. It is different from a `gate` of the limbic, which is a condition.
 _Avoid_: preset, launch set, scenario
+
+**Ticket**:
+One Markdown file in the `tickets/` folder, with a flat front matter. It is one item of the roadmap.
+Its status is one of five French slugs: `en-attente`, `en-cours`, `termine`, `bloque`,
+`amelioration-continue`. It is different from a GitHub issue, which is a report that comes from
+outside. There is no synchronisation between the two.
+_Avoid_: task, card, issue
+
+**Watch**:
+A ticket with the status `amelioration-continue`. It never ends. The project has three watches: the
+LLM model, the STT model and the TTS model. Each trial adds one dated line, with a measurement, to
+the body of the ticket.
+_Avoid_: permanent ticket, recurring task

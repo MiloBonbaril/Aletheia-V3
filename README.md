@@ -37,11 +37,11 @@ measure by hand.
 | io_discord (Discord gateway) | `services/io_discord` | Python | Operational |
 | io_text (terminal input) | `services/io_text` | Python | Operational |
 | benchmark (latency harness) | `services/benchmark` | Python | Operational |
+| terminal (local control panel) | `services/terminal` | Python | Operational (V0.1) |
 | io_yeux (eyes, chat aggregation) | `services/io_yeux` | — | Specification only |
 | io_visage (VTube Studio control) | `services/io_visage` | — | Specification only |
-| terminal (admin dashboard) | `services/terminal` | — | Specification only |
 
-The three last services contain a README file only. They have no source code.
+The two last services contain a README file only. They have no source code.
 
 ## Architecture
 
@@ -104,7 +104,7 @@ flowchart TB
 
     subgraph Observability ["🎛️ OBSERVABILITY"]
         bench["⚡ benchmark<br/><i>Python / latency graphs</i>"]:::core
-        terminal["🎛️ terminal (Admin Panel - Planned)"]:::core
+        terminal["🎛️ terminal (Control panel)<br/><i>Python / aiohttp + Preact</i>"]:::core
     end
 
     %% Ingress
@@ -140,7 +140,9 @@ flowchart TB
 
     %% Observability
     nats -->|passive subscription| bench
-    terminal -.->|monitoring| nats
+    terminal -->|io.user.msg.text| nats
+    nats -->|lobe.fragment_stream| terminal
+    terminal -.->|/varz, /connz on port 8222| nats
 ```
 
 ## Message flow
@@ -167,7 +169,19 @@ A user message causes this sequence:
 - A local llama.cpp server for the LLM inference
 - `ffmpeg` on the PATH, for the Discord voice functions
 
-### Steps
+### Start with the terminal
+
+The `terminal` service starts, stops and monitors every other service from one web page. It is the
+recommended method:
+
+```bash
+cd services/terminal && ../../venv/bin/python main.py   # then open http://127.0.0.1:7420
+```
+
+Select a profile (`complet`, `sans-vocal`, `discord` or `infra`), or start each service from its
+card. The daemon kills every service when it stops. See `services/terminal/README.md`.
+
+### Start by hand
 
 1. Clone the repository:
    ```bash
@@ -189,8 +203,9 @@ A user message causes this sequence:
    cargo run --release                                 # Rust services
    ```
 
-Each service has its own `requirements.txt` or `Cargo.toml`. There is no shared build system and no
-shared virtual environment.
+Each service has its own `requirements.txt` or `Cargo.toml`. There is no shared build system. In
+practice, all the Python services run from one virtual environment at the root, `venv/`, which holds
+every dependency. The `terminal` manifest uses it.
 
 ### How to stop Aletheia
 
@@ -206,7 +221,8 @@ There is no repository-level test runner. Some services have their own tests:
 
 ```bash
 cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
-cd services/cortex && cargo test        # cortex
+cd services/cortex && cargo test        # cortex (also io_oreilles)
+cd services/terminal && ../../venv/bin/python -m pytest tests/   # terminal
 ```
 
 ## Benchmarks
@@ -232,7 +248,7 @@ Desktop computer that runs the pipeline, the local LLM and the STT:
 
 ### Speech-to-text (io_oreilles)
 
-The measurement uses 28 real segments (61.9 s of audio) and the `whisper-small` model.
+A first measurement used 28 real segments (61.9 s of audio) and the `whisper-small` model.
 
 | Device | Median | p90 | Max | Real-time factor |
 |---|---|---|---|---|
@@ -240,7 +256,11 @@ The measurement uses 28 real segments (61.9 s of audio) and the `whisper-small` 
 | GPU (CUDA) | **97 ms** | 117 ms | 180 ms | **0.042×** |
 
 The CPU is 4.6 times slower than real time. Thus the GPU is not an option, it is a condition to use
-the voice mode. See `services/io_oreilles/README.md`.
+the voice mode.
+
+The service now uses `whisper-large-v3-turbo` in `int8_float16`, with the language set to `fr`. On
+20 French segments (62.7 s of audio), the median is **102 ms** (real-time factor 0.032×), with
+1602 MiB of VRAM. See `services/io_oreilles/README.md` for the full table.
 
 ### End-to-end history
 

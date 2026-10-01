@@ -14,8 +14,8 @@ on a mixed hardware configuration: a local CPU, a local GPU and, if necessary, a
 
 The system is **not** a sequential monolith. It is an **event-driven architecture**.
 
-- **Central message broker:** `NATS`, with fire-and-forget publish/subscribe. Four topics use
-  request-reply.
+- **Central message broker:** `NATS`, with fire-and-forget publish/subscribe. Three topics use
+  request-reply: `hippocampe.rag.query`, `hippocampe.rag.add` and `lobe.topic.generate`.
 - **Controlled decoupling:** an I/O service never waits for the LLM. The system buffers the state of
   the world. The AI reacts to the events when it becomes available.
 - **Asynchronous execution:** the LLM streams its tokens, and the TTS synthesizes small chunks. This
@@ -26,9 +26,10 @@ The system is **not** a sequential monolith. It is an **event-driven architectur
 The intelligence is divided between the devices. This keeps the GPU available for the game and for
 the OBS and VTube Studio rendering.
 
-- **Local CPU:** the orchestrator (Rust), the vector database, the TTS (ONNX).
-- **Local GPU:** the LLM inference (llama.cpp), the STT (CTranslate2 with CUDA), the game, VTube
-  Studio and the OBS encoding (NVENC).
+- **Local CPU:** the orchestrator (Rust), the databases (PostgreSQL and Qdrant).
+- **Local GPU:** the LLM inference (llama.cpp), the STT (CTranslate2 with CUDA), the TTS (torch with
+  CUDA graphs), the game, VTube Studio and the OBS encoding (NVENC). The LLM, the STT and the TTS
+  share the 16 GB of VRAM.
 - **Cloud:** not in use. The Groq and Mistral interfaces are present in the code but they are not
   connected. See `docs/adr/0002-lobe-frontal-stays-llama-cpp-only.md`.
 
@@ -73,14 +74,15 @@ server, for the cost, the privacy and the control of the model.
 
 ### 🎙️ E. The sensory and motor services (I/O)
 
-- **Ears (STT):** the pipeline is: audio capture → **Silero VAD** → **CTranslate2 and Whisper**. It
+- **Ears (STT):** the pipeline is: audio capture → **Silero VAD** → **CTranslate2 and Whisper
+  large-v3-turbo**, on the GPU. It
   creates `io.user.speak` events. It processes the local microphone, and also each speaker of a
   Discord voice channel.
 - **Keyboard (text I/O):** a direct text input service. It creates `io.user.msg.text` events.
 - **Discord:** the gateway to the users. It sends the text, it streams the voice audio in the two
   directions, and it publishes the presence signal.
-- **Eyes (Twitch):** a chat aggregator that limits the quantity of context. It will create
-  `CHAT_SUMMARY` events. Not implemented.
+- **Eyes (Twitch):** a chat aggregator that limits the quantity of context. It will publish
+  `io.chat.msg` events. Not implemented.
 - **Vocal cords (TTS):** `Audio8 TTS 0.6B`. It changes the text fragments into a real-time audio
   stream, in chunks that become longer, to keep the time to first audio low.
 - **Face (VTube controller):** lip-sync and expression control through a WebSocket to VTube Studio.
@@ -88,8 +90,15 @@ server, for the cost, the privacy and the control of the model.
 
 ### 🎛️ F. The terminal (administration frontend)
 
-- **Function:** a passive control panel for the monitoring and for the global parameters. Not
-  implemented.
+- **Language:** Python (an aiohttp daemon) and Preact (a console with no build step).
+- **Function:** the local control panel. The daemon owns the processes of the other services. It
+  starts them, stops them, rebuilds them and reads their logs. The console on `127.0.0.1:7420` also
+  edits the prompt files of the frontal lobe, shows the roadmap (`tickets/`) and the GitHub issues,
+  and sends text to Aletheia.
+- **Bus access:** it reads the bus figures through the monitoring endpoint of NATS. Its chat tab is
+  the only part that touches the bus, with one topic in each direction. See
+  `docs/adr/0003-terminal-superviseur-de-processus-local.md` and
+  `docs/adr/0004-le-terminal-publie-et-ecoute-un-seul-sujet.md`.
 
 ### ⚡ G. The benchmark (measurement)
 

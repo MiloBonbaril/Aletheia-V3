@@ -24,7 +24,9 @@ LLM and it structures the thought of the entity.
 ### Prerequisites
 
 - Python 3.12 or higher.
-- A llama.cpp server on `127.0.0.1:8080` that supports the OpenAI API.
+- A llama.cpp server on `127.0.0.1:8080` that supports the OpenAI API. `services/terminal/services.toml`
+  gives two commands for it: `llama-server` (Gemma 4 12B, in the profiles) and `llama-server-qwen`
+  (Qwen3.5 4B, no thinking). They use the same port: start only one.
 - A NATS server on `localhost:4222`.
 
 ```bash
@@ -140,8 +142,9 @@ Notes:
 pytest tests/
 ```
 
-The tests cover the pure functions: the mood and topic sections of the prompt builder, the fixture
-construction, the quality controls, and the analysis of the token stream. They need no server.
+The tests cover the pure functions: the mood and topic sections of the prompt builder, the reload
+of the `config/` files when their date changes, the fixture construction, the quality controls, and
+the analysis of the token stream. They need no server.
 
 ## 🔌 NATS interface
 

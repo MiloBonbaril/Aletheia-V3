@@ -19,6 +19,10 @@ python main.py
 
 The NATS address is in the source code. The service does not read `NATS_URL`.
 
+The `Chat` tab of `services/terminal` does the same work from the browser. Keep `io_text` for a
+session with no console. The manifest of the terminal lists `io_text`, but do not start it from
+the console, because it is an interactive editor. Start it in your own terminal.
+
 ## 📖 How to use it
 
 1. Start the service.

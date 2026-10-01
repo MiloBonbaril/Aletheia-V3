@@ -56,10 +56,12 @@ def test_the_two_io_voix_entries_differ_only_by_the_local_playback():
 
 
 def test_no_profile_starts_two_services_that_share_a_device():
-    """io_voix and io_voix_muet share the speaker; the io_oreilles pair shares the audio input."""
+    """io_voix and io_voix_muet share the speaker; the io_oreilles pair shares the audio input;
+    the two llama-server entries share port 8080."""
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
     for name, members in manifest.profiles.items():
-        for pair in ({"io_voix", "io_voix_muet"}, {"io_oreilles", "io_oreilles_discord"}):
+        for pair in ({"io_voix", "io_voix_muet"}, {"io_oreilles", "io_oreilles_discord"},
+                     {"llama-server", "llama-server-qwen"}):
             assert not pair <= set(members), f"le profil {name} lance {pair} ensemble"
 
 

@@ -269,7 +269,10 @@ before the transcription starts (`SILENCE_FRAMES_TO_END` in `src/segmenter.rs`).
 cargo test
 ```
 
-The tests cover the mode selection and the construction of the transcription event.
+The tests cover the mode selection, the construction of the transcription event, the stereo to
+mono downmix of the Discord audio, and the VAD segmentation of `src/segmenter.rs`: the start and the
+end of a segment, the discard of a burst too short to be a word, the forced cut of a long turn, and
+the preroll.
 
 ## 🔌 NATS interface
 

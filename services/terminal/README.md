@@ -3,7 +3,8 @@
 The local control panel of the project.
 
 > **Status: V0.1.** The terminal starts, stops, monitors and reads the logs of every service of the
-> project. It does not observe the content of the NATS bus.
+> project. It edits the prompt files, it shows the roadmap and the GitHub issues, and it sends text
+> to Aletheia. It observes one topic of the NATS bus only: see the Chat tab.
 
 ## 🎯 What it does
 
@@ -11,8 +12,8 @@ The service has two parts:
 
 - The **daemon** (`main.py`) owns the processes. It starts each service in its own process group,
   it reads the output, and it samples the resources. It serves an HTTP API on `127.0.0.1:7420`.
-- The **console** (`web/`) is the web interface that the daemon serves. It shows three tabs,
-  `Services`, `Chat` and `Config`.
+- The **console** (`web/`) is the web interface that the daemon serves. It shows four tabs,
+  `Services`, `Chat`, `Kanban` and `Config`.
 
 Read `docs/adr/0003-terminal-superviseur-de-processus-local.md` for the reasons of the design, and
 `docs/adr/0004-le-terminal-publie-et-ecoute-un-seul-sujet.md` for the bus access of the chat tab.
@@ -112,6 +113,24 @@ log buffers, and nothing goes to the disk.
 
 `io_text` stays in the manifest. It works when the console does not run.
 
+## 🗂️ The Kanban tab
+
+The tab shows two boards.
+
+- **`Tickets`** shows the files of the `tickets/` folder at the root of the repository, in five
+  columns, one for each status. Drag a card to change its status: the daemon writes the new
+  `status` and `updated` lines to the file. The console also creates, edits and deletes a ticket.
+  `tickets.py` reads the folder again each time a date changes. It holds no lock and no cache,
+  because the developer and the agents write the same files. `docs/agents/tickets.md` is the
+  contract of the files.
+- **`Issues`** shows the GitHub issues of the repository, read through the `gh` CLI, in one column
+  for each triage state (`docs/agents/triage-labels.md`). The board writes nothing: it does not
+  close an issue, it does not apply a label, and it does not copy an issue into `tickets/`. The
+  daemon keeps the answer of `gh` for 300 s. The refresh button asks `gh` again. When `gh` fails,
+  the board shows the reason.
+
+`gh` must be installed and authenticated for the `Issues` board. The other tabs do not need it.
+
 ## ✏️ The Config tab
 
 The tab edits the three Markdown files of the prompt of `lobe_frontal`: `PERSONA.md` (the
@@ -151,13 +170,16 @@ The daemon gives a pseudo-terminal to each child, because two services need one:
 
 ## 🔀 The pairs that share a device
 
-Four entries come in two pairs. Each pair is the same program with a different environment, and the
-two members of a pair must never run together. A test holds that rule for every profile.
+Six entries come in three pairs. The two members of a pair must never run together. A test holds
+that rule for every profile.
 
 - `io_oreilles` / `io_oreilles_discord`: the local microphone, or the per-speaker audio of a
   Discord voice channel (`--discord`).
 - `io_voix` / `io_voix_muet`: the local speaker, or `MUTE_LOCAL_PLAYBACK=1`, which publishes the
   audio on NATS only. Use the muted one with `io_discord`, because the bot plays the audio itself.
+- `llama-server` / `llama-server-qwen`: two LLM models on the same port, `127.0.0.1:8080`, and on
+  the same GPU. `llama-server` (Gemma) is the one in the profiles. Start `llama-server-qwen` by
+  hand in its place.
 
 Both `io_voix` entries carry `A8_VOICE_WAV` and `A8_VOICE_TEXT` in their `[service.env]`. Without a
 reference voice, Audio8 invents a new voice for each fragment. The recording lives in
