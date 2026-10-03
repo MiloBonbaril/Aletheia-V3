@@ -91,8 +91,10 @@ mis à jour).
 ## Côté `lobe_frontal`
 
 - S'abonne à `io.vision.state` et garde le dernier état reçu, comme l'humeur.
-- Ajoute une section `<vision age="…">` **après `<mood>`**, avec les sections variables : pas de
-  perte de cache de préfixe en plus.
+- Ajoute un bloc `<vision age="…">` **au début du dernier message utilisateur**, pas dans le
+  prompt système : l'âge et l'écran changent à chaque tour, et le prompt système suivi de
+  l'historique doit rester identique pour garder le cache de préfixe. Le bloc n'entre pas dans
+  l'historique.
 - `age` = maintenant − `checked_at`. Au-delà de 90 s, la section est absente : `io_yeux` est
   arrêté ou mort.
 - La section porte une consigne fixe écrite par `lobe_frontal` : « Description automatique de

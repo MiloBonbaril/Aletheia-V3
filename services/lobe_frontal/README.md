@@ -142,9 +142,10 @@ Notes:
 pytest tests/
 ```
 
-The tests cover the pure functions: the mood, vision and topic sections of the prompt builder, the reload
-of the `config/` files when their date changes, the fixture construction, the quality controls, and
-the analysis of the token stream. They need no server.
+The tests cover the pure functions: the mood and topic sections of the prompt builder, the vision
+block of the last user message, the reload of the `config/` files when their date changes, the
+fixture construction, the quality controls, and the analysis of the token stream. They need no
+server.
 
 ## 🔌 NATS interface
 

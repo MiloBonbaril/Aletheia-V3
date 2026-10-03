@@ -340,8 +340,8 @@ a periodic decay to the neutral baseline.
 
 The description of the screen of the streamer. Fire-and-forget, with no `correlation_id`.
 `io_yeux` publishes it after each observation. The `lobe_frontal` keeps the last state in memory
-and injects it in the `<vision>` section of the system prompt. It ignores a state when
-`checked_at` is older than 90 s.
+and injects it in a `<vision>` block at the start of the last user message. It ignores a state
+when `checked_at` is older than 90 s.
 
 - **Payload (JSON):**
   ```json

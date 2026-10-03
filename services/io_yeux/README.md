@@ -16,8 +16,8 @@ only: it never speaks, it never starts the TTS, and it does not control the comp
   server has no importance: Gemma-4 and Qwen3.5 are both multimodal. The prompt is factual, in
   French, with no persona. It tells the model to never copy a password, a key or a token.
 - **Publication:** it publishes the description on `io.vision.state`. The `lobe_frontal` injects
-  the last state in the `<vision>` section of the system prompt. No image goes into the
-  conversation.
+  the last state in a `<vision>` block at the start of the last user message. No image goes into
+  the conversation.
 
 There is one observation at a time. The loop waits for the answer, then it continues with the most
 recent capture. After a failed observation, the reference does not change, thus the next capture
@@ -68,7 +68,7 @@ python main.py
 ### Privacy
 
 The service does not mask the secrets yet. Stop it before you open a password manager or a `.env`
-file. The `<vision>` section disappears from the prompt 90 s after the stop. The logs show the
+file. The `<vision>` block disappears from the prompt 90 s after the stop. The logs show the
 application name only, never the activity or the visible text.
 
 ## 🧪 Tests
