@@ -64,6 +64,19 @@ def after_observation(reference: np.ndarray | None, thumb: np.ndarray, ok: bool)
     return thumb if ok else reference
 
 
+BACKOFF_FIRST = 5.0
+BACKOFF_MAX = 60.0
+
+
+def backoff(failures: int) -> float:
+    """Attente avant le prochain essai, après `failures` observations échouées de suite :
+    0, puis 5, 10, 20, 40 s, et 60 s au plus. Pas de retry explicite : la capture suivante
+    est le nouvel essai, puisque la référence ne change pas après un échec."""
+    if failures <= 0:
+        return 0.0
+    return min(BACKOFF_FIRST * 2 ** min(failures - 1, 10), BACKOFF_MAX)
+
+
 @dataclass(frozen=True)
 class Suspension:
     """La vision cède la place à la conversation : llama-server tourne en --parallel 1.

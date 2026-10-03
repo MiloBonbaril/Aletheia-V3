@@ -47,6 +47,22 @@ During the suspension, the capture continues, but there is no observation and no
 end, the next capture is compared with the reference: one observation only, with the most recent
 capture, if the screen changed.
 
+### Resilience
+
+A failure of `io_yeux` never stops the conversation, and you do not have to start it again by hand.
+
+- The service starts and captures without NATS and without `llama-server`. It connects to NATS in
+  the background, and it tries again every 2 s. It makes no observation while NATS is absent,
+  because nobody receives the state. After a NATS restart, it connects again automatically.
+- An observation that takes more than 10 s stops. The service closes the connection, and
+  `llama-server` stops the task.
+- There is no explicit retry: the next capture is the new attempt, because the reference does not
+  change after a failure. After each failure in sequence, the service waits 5 s, then 10, 20 and
+  40 s, and 60 s maximum. The first successful observation sets the normal rate again. Thus a
+  restart of `llama-server`, or a change from Gemma-4 to Qwen3.5, needs no action.
+- Each failure gives one log line, with no stack trace. A NATS error that does not change gives
+  one line only.
+
 ## 🔐 Authorization (one time, by hand)
 
 KWin refuses the capture from an executable that no `.desktop` file declares. The file

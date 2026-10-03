@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 from PIL import Image, ImageOps
 
 import capture
-from core import (MAX_ACTIVITY, MAX_APPLICATION, MAX_TEXT, MAX_TEXTS, Suspension, after_observation, build_state,
-                  decide, fragment_end, interaction_started, is_suspended, thumbnail, voice_event)
+from core import (MAX_ACTIVITY, MAX_APPLICATION, MAX_TEXT, MAX_TEXTS, Suspension, after_observation, backoff,
+                  build_state, decide, fragment_end, interaction_started, is_suspended, thumbnail, voice_event)
 
 load_dotenv()
 
@@ -62,7 +62,20 @@ def encode_jpeg(image: Image.Image) -> str:
     return base64.b64encode(buffer.getvalue()).decode()
 
 
+def describe(error: BaseException) -> str:
+    """Une ligne lisible, sans stack trace : les erreurs se répètent pendant une panne."""
+    text = str(error).strip().rstrip(".")
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
+
+
 async def observe(http: httpx.AsyncClient, image: Image.Image, observed_at: int, trigger: str) -> dict:
+    # Timeout sur l'ensemble : celui de httpx s'applique à chaque opération, pas à la requête.
+    # À l'échéance, la connexion se ferme et llama-server abandonne la tâche.
+    async with asyncio.timeout(VLM_TIMEOUT_SECONDS):
+        return await _observe(http, image, observed_at, trigger)
+
+
+async def _observe(http: httpx.AsyncClient, image: Image.Image, observed_at: int, trigger: str) -> dict:
     jpeg = await asyncio.to_thread(encode_jpeg, image)
     response = await http.post(LLAMA_URL, json={
         "messages": [
@@ -91,13 +104,6 @@ async def observe(http: httpx.AsyncClient, image: Image.Image, observed_at: int,
 
 async def main():
     print("👁️ Démarrage du service io_yeux...")
-    try:
-        nc = await nats.connect(NATS_URL, name="io_yeux")
-        print("✅ Connecté au système nerveux (NATS).")
-    except Exception as e:
-        print(f"❌ Erreur de connexion à NATS: {e}")
-        return
-
     print(f"   - Écran : {SCREEN}, {CAPTURE_FPS} capture/s, seuil={CHANGE_THRESHOLD}")
     print(f"   - Heartbeat : {HEARTBEAT_SECONDS} s, écran identique sous {IDENTICAL_THRESHOLD}")
 
@@ -131,17 +137,53 @@ async def main():
         if is_last(msg):
             suspension = fragment_end(suspension, time.monotonic())
 
-    await nc.subscribe("cortex.interaction.started", cb=interaction_started_handler)
-    # Pas io.voice.speak.audio : start et end suffisent pour savoir que io_voix vit.
-    await nc.subscribe("io.voice.speak.start", cb=voice_start_handler)
-    await nc.subscribe("io.voice.speak.end", cb=voice_end_handler)
-    await nc.subscribe("lobe.fragment_stream", cb=fragment_handler)
+    # NATS peut manquer au démarrage : la connexion se fait en tâche de fond, et la capture
+    # commence sans l'attendre. max_reconnect_attempts=-1 réessaie aussi la première connexion.
+    nc = nats.NATS()
+    last_nats_error = None
+
+    async def nats_error(e):
+        nonlocal last_nats_error
+        if describe(e) != last_nats_error:  # une ligne par erreur nouvelle, pas une toutes les 2 s
+            print(f"[io_yeux] ⚠️ NATS : {describe(e)}")
+            last_nats_error = describe(e)
+
+    async def nats_disconnected():
+        print("[io_yeux] ⚠️ NATS déconnecté, reconnexion en cours.")
+
+    async def nats_reconnected():
+        nonlocal last_nats_error
+        last_nats_error = None
+        print("[io_yeux] ✅ NATS reconnecté.")
+
+    async def connect_nats():
+        try:
+            await _connect_nats()
+        except Exception as e:  # une NATS_URL invalide, par exemple : sans ça, l'erreur se perd
+            print(f"[io_yeux] ❌ NATS abandonné : {describe(e)}. Aucune observation ne sera publiée.")
+
+    async def _connect_nats():
+        nonlocal last_nats_error
+        await nc.connect(NATS_URL, name="io_yeux", max_reconnect_attempts=-1, reconnect_time_wait=2,
+                         error_cb=nats_error, disconnected_cb=nats_disconnected,
+                         reconnected_cb=nats_reconnected)
+        last_nats_error = None
+        print("✅ Connecté au système nerveux (NATS).")
+        await nc.subscribe("cortex.interaction.started", cb=interaction_started_handler)
+        # Pas io.voice.speak.audio : start et end suffisent pour savoir que io_voix vit.
+        await nc.subscribe("io.voice.speak.start", cb=voice_start_handler)
+        await nc.subscribe("io.voice.speak.end", cb=voice_end_handler)
+        await nc.subscribe("lobe.fragment_stream", cb=fragment_handler)
+
+    nats_task = asyncio.create_task(connect_nats())
 
     bus = None
     last_capture_error = None
     reference = None
     state = None  # le dernier état publié
     last_check = time.monotonic()  # dernière publication : observation ou republication
+    failures = 0  # observations échouées de suite
+    retry_at = 0.0  # pas d'observation avant cet instant (backoff)
     period = 1.0 / CAPTURE_FPS
     try:
         async with httpx.AsyncClient(timeout=VLM_TIMEOUT_SECONDS) as http:
@@ -154,7 +196,7 @@ async def main():
                 except Exception as e:
                     # Une ligne par erreur nouvelle : un écran inconnu ne remplit pas les logs.
                     if str(e) != last_capture_error:
-                        print(f"[io_yeux] ⚠️ Capture impossible : {type(e).__name__}: {e}")
+                        print(f"[io_yeux] ⚠️ Capture impossible : {describe(e)}")
                         last_capture_error = str(e)
                     if bus is not None and not bus.connected:
                         bus = None  # KWin ou le bus de session a redémarré : on se reconnecte.
@@ -165,8 +207,12 @@ async def main():
                 thumb = await asyncio.to_thread(thumbnail, image)
 
                 now = time.monotonic()
+                # Sans NATS, observer ne sert à rien : personne ne reçoit l'état.
+                paused = is_suspended(suspension, now) or not nc.is_connected
                 trigger = decide(reference, thumb, CHANGE_THRESHOLD, now - last_check, HEARTBEAT_SECONDS,
-                                 IDENTICAL_THRESHOLD, is_suspended(suspension, now))
+                                 IDENTICAL_THRESHOLD, paused)
+                if trigger in ("change", "heartbeat") and now < retry_at:
+                    trigger = None  # backoff : llama-server ne répondait pas
                 if trigger == "republish":
                     # Écran identique à la référence : la description reste vraie, pas de VLM.
                     fresh = {**state, "checked_at": observed_at}
@@ -174,7 +220,7 @@ async def main():
                         await nc.publish("io.vision.state", json.dumps(fresh).encode())
                         state, last_check = fresh, time.monotonic()
                     except Exception as e:
-                        print(f"[io_yeux] ⚠️ Republication échouée : {type(e).__name__}: {e}")
+                        print(f"[io_yeux] ⚠️ Republication échouée : {describe(e)}")
                 elif trigger:
                     # Une seule observation en vol : la boucle l'attend, puis repart sur la frame
                     # la plus récente (latest-frame-wins par construction).
@@ -182,26 +228,41 @@ async def main():
                     observation = asyncio.create_task(observe(http, image, observed_at, trigger))
                     try:
                         new_state = await observation
-                        await nc.publish("io.vision.state", json.dumps(new_state).encode())
-                        state, last_check, ok = new_state, time.monotonic(), True
-                        # Ni activity ni visible_text dans les logs : ils peuvent contenir un secret.
-                        latency = time.monotonic() - started
-                        print(f"[io_yeux] 👁️ Observation ({trigger}, {latency:.1f} s) : {state['application']}")
                     except asyncio.CancelledError:
                         if asyncio.current_task().cancelling():
                             raise  # arrêt du service, pas une interaction
                         print("[io_yeux] ⏸️ Observation annulée : une interaction commence.")
                     except Exception as e:
-                        print(f"[io_yeux] ⚠️ Observation échouée : {type(e).__name__}: {e}")
+                        failures += 1
+                        wait = backoff(failures)
+                        retry_at = time.monotonic() + wait
+                        print(f"[io_yeux] ⚠️ Observation échouée : {describe(e)}. Prochain essai dans {wait:.0f} s.")
+                    else:
+                        if failures:
+                            print(f"[io_yeux] ✅ llama-server répond de nouveau, après {failures} échec(s).")
+                        failures, retry_at = 0, 0.0
+                        # Une panne de NATS n'est pas une panne de llama-server : pas de backoff ici.
+                        try:
+                            await nc.publish("io.vision.state", json.dumps(new_state).encode())
+                            state, last_check, ok = new_state, time.monotonic(), True
+                            # Ni activity ni visible_text dans les logs : ils peuvent contenir un secret.
+                            latency = time.monotonic() - started
+                            print(f"[io_yeux] 👁️ Observation ({trigger}, {latency:.1f} s) : {state['application']}")
+                        except Exception as e:
+                            print(f"[io_yeux] ⚠️ Publication échouée : {describe(e)}")
                     finally:
                         observation = None
                     reference = after_observation(reference, thumb, ok)
 
                 await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
     finally:
+        nats_task.cancel()
         if bus is not None:
             bus.disconnect()
-        await nc.drain()
+        try:
+            await (nc.drain() if nc.is_connected else nc.close())
+        except Exception as e:
+            print(f"[io_yeux] ⚠️ Arrêt de NATS : {describe(e)}")
 
 
 if __name__ == "__main__":
