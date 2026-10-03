@@ -15,7 +15,10 @@ service reads the pipe into memory. There is no file and no consent dialog. The 
 **The cost is a security compromise.** KWin restricts this interface. It accepts a call only from
 an executable that a `.desktop` file declares with
 `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`. KWin identifies the caller by its
-executable, not by its script. For `io_yeux`, the executable is the interpreter of the venv, and
+executable, not by its script: it reads `/proc/<pid>/exe` of the caller and compares it with the
+first word of the `Exec` line of each application `.desktop` file. `NoDisplay=true` keeps the file
+out of the application menu, and KWin still reads it. Verified on KWin 6.7.5: the authorization
+operates as soon as the file is in place, with no `kbuildsycoca6` and no new session. For `io_yeux`, the executable is the interpreter of the venv, and
 `venv/bin/python` resolves to `/usr/bin/python3.14`. Thus the `.desktop` file authorizes **every
 Python 3.14 script of the session** to capture the screen without a dialog. We accept this: the
 machine is a single-user workstation, and the scripts that run on it are the scripts of the

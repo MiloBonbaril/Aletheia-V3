@@ -17,7 +17,7 @@ from src.fragments import take_fragment
 # Balises du prompt système (cf. PromptBuilder.build_system_prompt) : si l'une
 # ressort dans la réponse, le modèle recrache son prompt au lieu de jouer Aletheia.
 XML_LEAK_PATTERN = re.compile(
-    r"</?\s*(system|persona|core_memory|users|tools?|mood|recall|context)\b", re.I
+    r"</?\s*(system|persona|core_memory|users|tools?|mood|vision|recall|context)\b", re.I
 )
 
 # ponytail: détection de langue par mots-outils, pas de dépendance langdetect.

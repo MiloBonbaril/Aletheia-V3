@@ -209,6 +209,17 @@ async def main():
     await nc.subscribe("limbic.mood.update", cb=mood_update_handler)
     logger.info("👂 Lobe Frontal abonné à limbic.mood.update")
 
+    async def vision_state_handler(msg):
+        """Met en cache le dernier état de l'écran publié par io_yeux pour le prochain prompt.
+        PromptBuilder l'ignore au-delà de 90 s: pas besoin de l'effacer ici."""
+        try:
+            prompt_builder.vision = json.loads(msg.data.decode())
+        except Exception as e:
+            logger.error(f"Erreur parsing vision.state: {e}")
+
+    await nc.subscribe("io.vision.state", cb=vision_state_handler)
+    logger.info("👂 Lobe Frontal abonné à io.vision.state")
+
     async def topic_generate_handler(msg):
         """Réflexion silencieuse à la demande de limbic (#15) : jamais publié sur lobe.fragment_stream.
         Passe par INFERENCE_SEMAPHORE comme prompt_handler : sans ça, une réflexion pourrait tourner

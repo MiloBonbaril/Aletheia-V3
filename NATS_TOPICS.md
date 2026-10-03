@@ -334,6 +334,36 @@ a periodic decay to the neutral baseline.
 
 ---
 
+### 👁️ Vision (io_yeux)
+
+#### `io.vision.state`
+
+The description of the screen of the streamer. Fire-and-forget, with no `correlation_id`.
+`io_yeux` publishes it after each observation. The `lobe_frontal` keeps the last state in memory
+and injects it in the `<vision>` section of the system prompt. It ignores a state when
+`checked_at` is older than 90 s.
+
+- **Payload (JSON):**
+  ```json
+  {
+    "observed_at": 1759490000123,
+    "checked_at": 1759490000123,
+    "trigger": "change",
+    "application": "Blender",
+    "activity": "Ajuste le rig du bras droit d'un personnage en Pose Mode.",
+    "visible_text": ["Pose Mode", "Armature"]
+  }
+  ```
+- `observed_at`: the time of the capture that the VLM described, in milliseconds since the epoch.
+- `checked_at`: the last time that `io_yeux` confirmed that the description is correct. It is
+  equal to `observed_at` for now.
+- `trigger`: the cause of the observation. The value is `change`.
+- `application`: the name of the application in the foreground, 80 characters maximum.
+- `activity`: one sentence, 200 characters maximum.
+- `visible_text`: 5 items maximum, 80 characters maximum each, in the language of the screen.
+
+---
+
 ### 🔊 Outputs and actions (egress)
 
 #### `io.voice.speak.start`
@@ -447,7 +477,7 @@ restart of the cortex clears them.
 | Service | Subscribes to | Publishes on |
 |---|---|---|
 | cortex | `io.user.msg.text`, `io.user.speak`, `io.user.speak.raw`, `limbic.proactive.trigger`, `lobe.fragment_stream` | `cortex.prompt`, `hippocampe.context.build`, `cortex.interaction.started` |
-| lobe_frontal | `cortex.prompt`, `hippocampe.context.ready`, `limbic.mood.update`, `lobe.topic.generate` (reply) | `lobe.fragment_stream`, `hippocampe.history.add`, `limbic.mood.set`, `hippocampe.rag.query` (request), `hippocampe.rag.add` (request) |
+| lobe_frontal | `cortex.prompt`, `hippocampe.context.ready`, `limbic.mood.update`, `io.vision.state`, `lobe.topic.generate` (reply) | `lobe.fragment_stream`, `hippocampe.history.add`, `limbic.mood.set`, `hippocampe.rag.query` (request), `hippocampe.rag.add` (request) |
 | hippocampe | `hippocampe.context.build`, `hippocampe.history.add`, `hippocampe.rag.query`, `hippocampe.rag.add` | `hippocampe.context.ready` |
 | limbic | `limbic.mood.set`, `cortex.interaction.started`, `io.presence.discord_voice` | `limbic.mood.update`, `limbic.proactive.trigger`, `lobe.topic.generate` (request) |
 | io_oreilles | `io.discord.voice.frame` (`--discord` only) | `io.user.speak`, `io.user.speak.raw` |
@@ -455,4 +485,5 @@ restart of the cortex clears them.
 | terminal | `lobe.fragment_stream` | `io.user.msg.text` |
 | io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame` |
 | io_text | — | `io.user.msg.text` |
+| io_yeux | — | `io.vision.state` |
 | benchmark | all topics of the loaded graph | — |

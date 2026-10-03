@@ -36,6 +36,7 @@ measure by hand.
 | io_voix (voice, TTS) | `services/io_voix` | Python | Operational |
 | io_discord (Discord gateway) | `services/io_discord` | Python | Operational |
 | io_text (terminal input) | `services/io_text` | Python | Operational |
+| io_yeux (eyes, screen vision) | `services/io_yeux` | Python | Operational (V1, KDE Plasma only) |
 | benchmark (latency harness) | `services/benchmark` | Python | Operational |
 | terminal (local control panel) | `services/terminal` | Python | Operational (V0.1) |
 | io_chat (chat aggregation) | `services/io_chat` | — | Specification only |
@@ -73,6 +74,7 @@ flowchart TB
         oreilles["🎙️ io_oreilles (Ears / STT)<br/><i>Rust / Silero VAD / Whisper</i>"]:::ingress
         discord["💬 io_discord (Discord)<br/><i>Python / discord.py</i>"]:::ingress
         text_io["⌨️ io_text (Text I/O)<br/><i>Python / CLI</i>"]:::ingress
+        yeux["👁️ io_yeux (Eyes / Screen)<br/><i>Python / KWin + VLM</i>"]:::ingress
         chat["📺 io_chat (Chat - Planned)"]:::ingress
     end
 
@@ -111,6 +113,8 @@ flowchart TB
     oreilles -->|io.user.speak<br/>io.user.speak.raw| nats
     discord -->|io.user.msg.text<br/>io.discord.voice.frame<br/>io.presence.discord_voice| nats
     text_io -->|io.user.msg.text| nats
+    yeux -->|io.vision.state| nats
+    yeux <-->|screen description| Compute_API
     chat -.->|io.chat.msg| nats
 
     nats -->|ingress events| cortex
@@ -123,7 +127,7 @@ flowchart TB
     hippocampe <-->|History read / write| postgres
     hippocampe -->|hippocampe.context.ready| nats
 
-    nats -->|cortex.prompt +<br/>context.ready| lobe
+    nats -->|cortex.prompt +<br/>context.ready<br/>io.vision.state| lobe
     lobe <-->|Streamed tokens| Compute_API
     lobe -->|lobe.fragment_stream| nats
 
@@ -220,7 +224,7 @@ docker compose down
 There is no repository-level test runner. Some services have their own tests:
 
 ```bash
-cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
+cd services/<name> && pytest tests/     # io_discord, io_voix, io_yeux, limbic, lobe_frontal, hippocampe
 cd services/cortex && cargo test        # cortex (also io_oreilles)
 cd services/terminal && ../../venv/bin/python -m pytest tests/   # terminal
 ```

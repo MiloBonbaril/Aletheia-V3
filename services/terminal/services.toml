@@ -195,6 +195,15 @@ cmd = ["{python}", "bot.py"]
 depends_on = ["nats"]
 
 [[service]]
+name = "io_yeux"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_yeux"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats", "llama-server"]
+note = "Screen capture. In no profile: start it by hand, stop it to pause the capture."
+
+[[service]]
 name = "io_text"
 group = "Entrées/sorties"
 kind = "process"

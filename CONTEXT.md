@@ -47,6 +47,19 @@ description. The `limbic` service is the only owner of this state. Without reinf
 intensity decreases to a neutral baseline.
 _Avoid_: emotion state, feeling
 
+**Observation**:
+One description of the screen by the VLM. `io_yeux` sends a capture to `llama-server` and publishes
+the result on `io.vision.state`. A capture is not an observation: `io_yeux` captures the screen once
+each second, and it observes only when the screen changes.
+_Avoid_: analysis, vision call, screenshot
+
+**Reference**:
+The capture of the last successful observation, in the 160×90 grayscale form. `io_yeux` compares
+each new capture with the reference, not with the previous capture. Thus a slow change, for example
+a scroll, becomes an observation when the sum of the small changes is above the threshold. The
+reference changes only after a successful observation.
+_Avoid_: previous frame, baseline
+
 **Correlation ID**:
 The UUID that the cortex gives to one interaction. It travels on `cortex.prompt`,
 `hippocampe.context.build`, `hippocampe.context.ready` and `cortex.interaction.started`. It lets the

@@ -142,13 +142,14 @@ Notes:
 pytest tests/
 ```
 
-The tests cover the pure functions: the mood and topic sections of the prompt builder, the reload
+The tests cover the pure functions: the mood, vision and topic sections of the prompt builder, the reload
 of the `config/` files when their date changes, the fixture construction, the quality controls, and
 the analysis of the token stream. They need no server.
 
 ## 🔌 NATS interface
 
 - **Subscribes to:** `cortex.prompt` (queue `lobe_workers`), `hippocampe.context.ready`,
-  `limbic.mood.update`, `lobe.topic.generate` (queue `lobe_workers`, request-reply)
+  `limbic.mood.update`, `io.vision.state`, `lobe.topic.generate` (queue `lobe_workers`,
+  request-reply)
 - **Publishes on:** `lobe.fragment_stream`, `hippocampe.history.add`, `limbic.mood.set`
 - **Requests:** `hippocampe.rag.query`, `hippocampe.rag.add`

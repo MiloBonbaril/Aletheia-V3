@@ -105,6 +105,14 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   (`io.user.msg.text` out, `lobe.fragment_stream` in). See
   `docs/adr/0003-terminal-superviseur-de-processus-local.md` and
   `docs/adr/0004-le-terminal-publie-et-ecoute-un-seul-sujet.md`.
+- **io_yeux** (`services/io_yeux`, Python) — the vision of the screen. It captures the active
+  screen once each second through the KWin D-Bus interface `ScreenShot2`, in memory only. It
+  compares a 160×90 grayscale copy with the reference, which is the capture of the last successful
+  observation. Above the threshold, it sends the screen (JPEG, 1280×720) to `llama-server` with a
+  fixed `json_schema`, and it publishes the description on `io.vision.state`. The `lobe_frontal`
+  injects the last state in the `<vision>` section of the prompt. No image goes into the
+  conversation. The service operates on KDE Plasma only, and it is in no profile of
+  `services/terminal`. See `docs/adr/0006-io-yeux-capture-par-kwin-screenshot2.md`.
 - **io_chat**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
   two contain a README file only. There is no source code.
 
@@ -172,7 +180,7 @@ tests, and they cover the pure functions only. `benchmark`, `io_text` and `io_or
 Python test; the Rust tests of `io_oreilles` are in `src/`:
 
 ```bash
-cd services/<name> && pytest tests/     # io_discord, io_voix, limbic, lobe_frontal, hippocampe
+cd services/<name> && pytest tests/     # io_discord, io_voix, io_yeux, limbic, lobe_frontal, hippocampe
 cd services/cortex && cargo test        # cortex (also io_oreilles)
 cd services/terminal && ../../venv/bin/python -m pytest tests/   # terminal
 ```
@@ -181,7 +189,7 @@ cd services/terminal && ../../venv/bin/python -m pytest tests/   # terminal
 
 Each service reads its own `.env` file. The Python services use `python-dotenv`.
 
-**Important:** only `benchmark`, `io_oreilles` and `limbic` read `NATS_URL`. The other services have
+**Important:** only `benchmark`, `io_oreilles`, `io_yeux` and `limbic` read `NATS_URL`. The other services have
 the address `nats://localhost:4222` in their source code.
 
 - lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`
@@ -195,6 +203,8 @@ the address `nats://localhost:4222` in their source code.
 - io_voix: `A8_QUANT`, `A8_VOICE_WAV`, `A8_VOICE_TEXT`, `A8_CHUNK_SCHEDULE`, `A8_MODEL_DIR`,
   `A8_TEMPERATURE`, `A8_TOP_P`, `A8_TOP_K`, `A8_MAX_FRAMES`, `MUTE_LOCAL_PLAYBACK`
 - io_oreilles: `STT_LANGUAGE`, `STT_MODEL_PATH`, `RAW_AUDIO`, `ORT_DYLIB_PATH`
+- io_yeux: `IO_YEUX_SCREEN`, `IO_YEUX_CAPTURE_FPS`, `IO_YEUX_CHANGE_THRESHOLD`, `IO_YEUX_MAX_TOKENS`,
+  `IO_YEUX_LLAMA_URL`
 
 ## Work between services
 

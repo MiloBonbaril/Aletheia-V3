@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=io_yeux
+Comment=Aletheia: screen capture through KWin ScreenShot2. See docs/adr/0006.
+# KWin compares this path with the executable of the caller (/proc/<pid>/exe).
+# The venv interpreter resolves to this file: this authorizes every Python 3.14 script.
+Exec=/usr/bin/python3.14
+NoDisplay=true
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

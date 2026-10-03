@@ -72,6 +72,14 @@ def test_every_profile_names_known_services():
         assert set(members) <= known, f"le profil {name} nomme un service inconnu"
 
 
+def test_io_yeux_is_in_no_profile():
+    """The screen capture stays a deliberate act: see docs/adr/0006."""
+    manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
+    assert "io_yeux" in {e.name for e in manifest.entries}
+    for name, members in manifest.profiles.items():
+        assert "io_yeux" not in members, f"le profil {name} lance io_yeux"
+
+
 def test_manifest_rejects_a_duplicate_name(tmp_path):
     bad = tmp_path / "dup.toml"
     bad.write_text(

@@ -1,0 +1,7 @@
+nats-py
+python-dotenv
+httpx
+dbus-next
+numpy
+Pillow
+pytest
