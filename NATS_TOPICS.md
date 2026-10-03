@@ -378,6 +378,8 @@ in progress. The suspension stops at the first of these events:
 - `application`: the name of the application in the foreground, 80 characters maximum.
 - `activity`: one sentence, 200 characters maximum.
 - `visible_text`: 5 items maximum, 80 characters maximum each, in the language of the screen.
+- `io_yeux` replaces each probable secret with `[masqué]` in `application`, `activity` and
+  `visible_text`, before the publication. See the README of `io_yeux`.
 
 ---
 

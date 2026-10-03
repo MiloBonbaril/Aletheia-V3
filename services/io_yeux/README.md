@@ -93,9 +93,27 @@ python main.py
 
 ### Privacy
 
-The service does not mask the secrets yet. Stop it before you open a password manager or a `.env`
-file. The `<vision>` block disappears from the prompt 90 s after the stop. The logs show the
-application name only, never the activity or the visible text.
+The risk: a key is visible in a terminal, the VLM copies it, Aletheia reads it aloud on the stream,
+and the `hippocampe` keeps the answer. The instruction of the perception prompt is not sufficient: in
+a test, Qwen3.5 copied an `sk-…` key exactly three times out of three.
+
+Thus the service masks the secrets before each publication, in `application`, `activity` and each
+item of `visible_text`. Each match becomes `[masqué]`:
+
+- the known prefixes: `sk-`, `ghp_`, `github_pat_`, `AKIA`, `xoxb-`, `xoxp-`, and the JWT (`eyJ…`);
+- the password of a connection URL (`postgres://admin:[masqué]@db`);
+- a sequence of 25 characters or more without a space, if it has an alphanumeric block of 20
+  characters or more with digits and letters (a hash, a base62 key), or if its entropy is 4.4 bits
+  per character or more (a base64 key). The entropy rule does not apply to a sequence that starts
+  with `/`, `~` or `.`: it is a path. A long build path with a hash can be masked completely.
+
+The masking cannot find all the secrets: a short password outside a URL, or a key that the VLM
+reads with errors, can pass. **Pause procedure:** before you open a password manager or a `.env` file, stop
+`io_yeux` from the console of `services/terminal`. The `<vision>` block disappears from the prompt
+90 s after the stop, at the latest. Start the service again when the screen shows no secret.
+
+No capture goes to the disk. The logs show the application name only, never the activity or the
+visible text.
 
 ## 🧪 Tests
 
@@ -104,8 +122,8 @@ pytest tests/
 ```
 
 The tests cover the pure functions of `core.py`: the reduction, the difference, the decision to
-observe (threshold, heartbeat, republication, suspension), the reference, and the construction of
-the payload. They need no server and no screen.
+observe (threshold, heartbeat, republication, suspension), the reference, the masking of the
+secrets, and the construction of the payload. They need no server and no screen.
 
 ## 🔌 NATS interface
 

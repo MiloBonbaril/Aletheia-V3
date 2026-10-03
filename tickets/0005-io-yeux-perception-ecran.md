@@ -131,7 +131,7 @@ mis à jour).
 ## Livraison
 
 - [ ] `services/io_yeux` en Python : `main.py` (boucle, NATS), `capture.py` (D-Bus KWin),
-      `redact.py` (masquage), `requirements.txt` (+ `dbus-next`), `.env`, `io_yeux.desktop`,
+      `core.py` (décision, masquage), `requirements.txt` (+ `dbus-next`), `.env`, `io_yeux.desktop`,
       README.
 - [ ] `tests/` sur les fonctions pures : différence d'image, masquage, décision « observer ou
       non » (seuil, heartbeat, saut, suspension).

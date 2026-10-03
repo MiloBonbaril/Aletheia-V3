@@ -1,5 +1,8 @@
 """Cœur de décision pur de io_yeux (sans I/O) : facile à tester, aucune dépendance NATS ni D-Bus."""
 
+import math
+import re
+from collections import Counter
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -94,11 +97,57 @@ def is_suspended(state: Suspension, now: float) -> bool:
     return state.started is not None and now - state.started < SUSPENSION_TIMEOUT
 
 
+MASK = "[masqué]"
+
+# Préfixes connus. Le lookbehind évite « task-runner » (s, k, - au milieu d'un mot).
+_KNOWN_SECRET = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"sk-[A-Za-z0-9_\-]{16,}"
+    r"|ghp_[A-Za-z0-9]{20,}"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    r"|AKIA[A-Z0-9]{12,}"
+    r"|xox[bp]-[A-Za-z0-9\-]{10,}"
+    r"|eyJ[A-Za-z0-9_\-.]{16,}"
+    r")"
+)
+# Le mot de passe d'une URL de connexion : postgres://admin:<mot de passe>@hôte.
+_URL_PASSWORD = re.compile(r"(://[^:/\s@]+:)[^@\s]+(?=@)")
+# Candidat à forte entropie : une suite de 25 caractères au moins, sans espace.
+_RUN = re.compile(r"[A-Za-z0-9_\-+/=]{25,}")
+_ALNUM_BLOCK = re.compile(r"[A-Za-z0-9]+")
+
+
+def _entropy(text: str) -> float:
+    """Entropie de Shannon, en bits par caractère."""
+    counts = Counter(text)
+    return -sum(n / len(text) * math.log2(n / len(text)) for n in counts.values())
+
+
+def _looks_random(run: str) -> bool:
+    """Mesuré : une clé base62 de 25 caractères donne 4,29, un nom de paquet 4,24. L'entropie
+    seule ne les sépare pas. D'où deux règles : un bloc alphanumérique de 20 caractères au moins
+    qui mêle chiffres et lettres (hash, clé base62), ou une entropie de 4,4 au moins (base64)."""
+    for block in _ALNUM_BLOCK.findall(run):
+        if len(block) >= 20 and any(c.isdigit() for c in block) and any(c.isalpha() for c in block):
+            return True
+    if run.startswith(("/", "~", ".")):
+        return False  # un chemin : son entropie ne dit rien
+    return _entropy(run) >= 4.4
+
+
+def redact(text: str) -> str:
+    """Remplace chaque secret probable par [masqué]. Le risque visé : la VTubeuse lit une clé
+    à voix haute en stream, et hippocampe la persiste. Un texte ordinaire passe intact."""
+    text = _KNOWN_SECRET.sub(MASK, text)
+    text = _URL_PASSWORD.sub(lambda m: m.group(1) + MASK, text)
+    return _RUN.sub(lambda m: MASK if _looks_random(m.group()) else m.group(), text)
+
+
 def build_state(answer: dict, observed_at: int, trigger: str) -> dict:
     """Construit le payload io.vision.state depuis la réponse du VLM.
 
     Le json_schema borne déjà la sortie ; on réapplique les bornes au cas où le serveur
-    l'ignorerait. Une réponse de mauvaise forme lève KeyError ou TypeError : l'observation échoue.
+    l'ignorerait. Les secrets sont masqués ici, avant toute publication. Une réponse de mauvaise forme lève KeyError ou TypeError : l'observation échoue.
     """
     texts = answer["visible_text"]
     if not isinstance(texts, list):
@@ -107,7 +156,8 @@ def build_state(answer: dict, observed_at: int, trigger: str) -> dict:
         "observed_at": observed_at,
         "checked_at": observed_at,
         "trigger": trigger,
-        "application": str(answer["application"])[:MAX_APPLICATION],
-        "activity": str(answer["activity"])[:MAX_ACTIVITY],
-        "visible_text": [str(text)[:MAX_TEXT] for text in texts[:MAX_TEXTS]],
+        # Masquer avant de couper : une clé coupée en deux échapperait aux motifs.
+        "application": redact(str(answer["application"]))[:MAX_APPLICATION],
+        "activity": redact(str(answer["activity"]))[:MAX_ACTIVITY],
+        "visible_text": [redact(str(text))[:MAX_TEXT] for text in texts[:MAX_TEXTS]],
     }
