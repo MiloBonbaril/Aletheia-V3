@@ -111,8 +111,10 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   observation. Above the threshold, it sends the screen (JPEG, 1280×720) to `llama-server` with a
   fixed `json_schema`, and it publishes the description on `io.vision.state`. The `lobe_frontal`
   injects the last state in a `<vision>` block at the start of the last user message, not in the
-  system prompt, to keep the prefix cache. No image goes into the conversation. The service
-  operates on KDE Plasma only, and it is in no profile of `services/terminal`. See `docs/adr/0006-io-yeux-capture-par-kwin-screenshot2.md`.
+  system prompt, to keep the prefix cache. No image goes into the conversation. During an
+  interaction, the service makes no observation, because `llama-server` runs with `--parallel 1`.
+  The service operates on KDE Plasma only, and it is in no profile of `services/terminal`. See
+  `docs/adr/0006-io-yeux-capture-par-kwin-screenshot2.md`.
 - **io_chat**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
   two contain a README file only. There is no source code.
 

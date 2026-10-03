@@ -28,6 +28,25 @@ There is one observation at a time. The loop waits for the answer, then it conti
 recent capture. After a failed observation, the reference does not change, thus the next capture
 tries again.
 
+### The vision gives way to the conversation
+
+`llama-server` runs with `--parallel 1`. An observation (approximately 1000 image tokens) that
+occurs during a message makes the `lobe_frontal` wait, and it uses the GPU while `io_voix`
+synthesizes the voice. Thus:
+
+- `cortex.interaction.started` suspends the observations. It also cancels the observation in
+  progress: the service closes the HTTP connection, and `llama-server` stops the task. A test on
+  `llama-server` showed that this operates without `stream: true`.
+- If `io_voix` is active (an `io.voice.speak.start` or `.end` in the last 10 minutes), the
+  suspension stops at `io.voice.speak.end` with `is_last: true`. `io_voix` always publishes it,
+  also after `stay_silent`.
+- If `io_voix` is not active, the suspension stops at `lobe.fragment_stream` with `is_last: true`.
+- In all cases, the suspension stops 30 s after its start.
+
+During the suspension, the capture continues, but there is no observation and no heartbeat. At the
+end, the next capture is compared with the reference: one observation only, with the most recent
+capture, if the screen changed.
+
 ## 🔐 Authorization (one time, by hand)
 
 KWin refuses the capture from an executable that no `.desktop` file declares. The file
@@ -85,9 +104,11 @@ pytest tests/
 ```
 
 The tests cover the pure functions of `core.py`: the reduction, the difference, the decision to
-observe (threshold, heartbeat, republication), the reference, and the construction of the payload.
-They need no server and no screen.
+observe (threshold, heartbeat, republication, suspension), the reference, and the construction of
+the payload. They need no server and no screen.
 
 ## 🔌 NATS interface
 
+- **Subscribes to:** `cortex.interaction.started`, `io.voice.speak.start`, `io.voice.speak.end`,
+  `lobe.fragment_stream`
 - **Publishes on:** `io.vision.state`

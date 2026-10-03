@@ -11,7 +11,7 @@ from core import after_observation, build_state, decide, difference, thumbnail
 
 
 # FRESH : dernière vérification à l'instant. DUE : heartbeat échu.
-FRESH = {"threshold": 0.02, "since_check": 0.0, "heartbeat": 30.0, "identical": 0.00005}
+FRESH = {"threshold": 0.02, "since_check": 0.0, "heartbeat": 30.0, "identical": 0.00005, "suspended": False}
 DUE = {**FRESH, "since_check": 30.0}
 
 

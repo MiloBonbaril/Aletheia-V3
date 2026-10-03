@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 from PIL import Image, ImageOps
 
 import capture
-from core import MAX_ACTIVITY, MAX_APPLICATION, MAX_TEXT, MAX_TEXTS, after_observation, build_state, decide, thumbnail
+from core import (MAX_ACTIVITY, MAX_APPLICATION, MAX_TEXT, MAX_TEXTS, Suspension, after_observation, build_state,
+                  decide, fragment_end, interaction_started, is_suspended, thumbnail, voice_event)
 
 load_dotenv()
 
@@ -100,6 +101,42 @@ async def main():
     print(f"   - Écran : {SCREEN}, {CAPTURE_FPS} capture/s, seuil={CHANGE_THRESHOLD}")
     print(f"   - Heartbeat : {HEARTBEAT_SECONDS} s, écran identique sous {IDENTICAL_THRESHOLD}")
 
+    # llama-server tourne en --parallel 1 : la vision cède la place à la conversation.
+    suspension = Suspension()
+    observation = None  # la tâche de l'observation en vol
+
+    def is_last(msg) -> bool:
+        try:
+            return bool(json.loads(msg.data.decode()).get("is_last"))
+        except Exception:
+            return False
+
+    async def interaction_started_handler(msg):
+        nonlocal suspension
+        suspension = interaction_started(suspension, time.monotonic())
+        if observation is not None and not observation.done():
+            # Fermer la connexion suffit : llama-server abandonne la tâche et sert lobe_frontal.
+            observation.cancel()
+
+    async def voice_start_handler(msg):
+        nonlocal suspension
+        suspension = voice_event(suspension, time.monotonic())
+
+    async def voice_end_handler(msg):
+        nonlocal suspension
+        suspension = voice_event(suspension, time.monotonic(), is_last_end=is_last(msg))
+
+    async def fragment_handler(msg):
+        nonlocal suspension
+        if is_last(msg):
+            suspension = fragment_end(suspension, time.monotonic())
+
+    await nc.subscribe("cortex.interaction.started", cb=interaction_started_handler)
+    # Pas io.voice.speak.audio : start et end suffisent pour savoir que io_voix vit.
+    await nc.subscribe("io.voice.speak.start", cb=voice_start_handler)
+    await nc.subscribe("io.voice.speak.end", cb=voice_end_handler)
+    await nc.subscribe("lobe.fragment_stream", cb=fragment_handler)
+
     bus = None
     last_capture_error = None
     reference = None
@@ -127,8 +164,9 @@ async def main():
                 observed_at = int(time.time() * 1000)
                 thumb = await asyncio.to_thread(thumbnail, image)
 
-                trigger = decide(reference, thumb, CHANGE_THRESHOLD,
-                                 time.monotonic() - last_check, HEARTBEAT_SECONDS, IDENTICAL_THRESHOLD)
+                now = time.monotonic()
+                trigger = decide(reference, thumb, CHANGE_THRESHOLD, now - last_check, HEARTBEAT_SECONDS,
+                                 IDENTICAL_THRESHOLD, is_suspended(suspension, now))
                 if trigger == "republish":
                     # Écran identique à la référence : la description reste vraie, pas de VLM.
                     fresh = {**state, "checked_at": observed_at}
@@ -141,15 +179,22 @@ async def main():
                     # Une seule observation en vol : la boucle l'attend, puis repart sur la frame
                     # la plus récente (latest-frame-wins par construction).
                     ok = False
+                    observation = asyncio.create_task(observe(http, image, observed_at, trigger))
                     try:
-                        new_state = await observe(http, image, observed_at, trigger)
+                        new_state = await observation
                         await nc.publish("io.vision.state", json.dumps(new_state).encode())
                         state, last_check, ok = new_state, time.monotonic(), True
                         # Ni activity ni visible_text dans les logs : ils peuvent contenir un secret.
                         latency = time.monotonic() - started
                         print(f"[io_yeux] 👁️ Observation ({trigger}, {latency:.1f} s) : {state['application']}")
+                    except asyncio.CancelledError:
+                        if asyncio.current_task().cancelling():
+                            raise  # arrêt du service, pas une interaction
+                        print("[io_yeux] ⏸️ Observation annulée : une interaction commence.")
                     except Exception as e:
                         print(f"[io_yeux] ⚠️ Observation échouée : {type(e).__name__}: {e}")
+                    finally:
+                        observation = None
                     reference = after_observation(reference, thumb, ok)
 
                 await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))

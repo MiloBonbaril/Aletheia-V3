@@ -59,7 +59,8 @@ llama-server tourne en `--parallel 1` : une observation bloque la file de la con
 vision doit **céder la place**.
 
 - `cortex.interaction.started` → suspension des observations. Une observation en vol est annulée :
-  la requête est en `stream: true`, `io_yeux` ferme la connexion, llama-server abandonne la tâche.
+  `io_yeux` ferme la connexion, llama-server abandonne la tâche. Vérifié : cela marche sans
+  `stream: true`, la requête reste donc non streamée.
 - Fin de la suspension :
   - au `io.voice.speak.end` avec `is_last: true`, si `io_voix` est actif (un `io.voice.speak.*`
     vu dans les 10 dernières minutes) ; `io_voix` le publie toujours, même après `stay_silent` ;

@@ -348,6 +348,15 @@ The `lobe_frontal` keeps the last state in memory and injects it in a `<vision>`
 of the last user message. It ignores a state when `checked_at` is older than 90 s: this rule
 detects only a stopped `io_yeux`, not a screen that does not change.
 
+`io_yeux` makes no observation during an interaction, because `llama-server` runs with
+`--parallel 1`. `cortex.interaction.started` suspends the observations and cancels the observation
+in progress. The suspension stops at the first of these events:
+
+- `io.voice.speak.end` with `is_last: true`, if `io_voix` is active (an `io.voice.speak.start` or
+  `.end` in the last 10 minutes);
+- `lobe.fragment_stream` with `is_last: true`, if `io_voix` is not active;
+- 30 s after the start of the suspension.
+
 - **Payload (JSON):**
   ```json
   {
@@ -493,5 +502,5 @@ restart of the cortex clears them.
 | terminal | `lobe.fragment_stream` | `io.user.msg.text` |
 | io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame` |
 | io_text | — | `io.user.msg.text` |
-| io_yeux | — | `io.vision.state` |
+| io_yeux | `cortex.interaction.started`, `io.voice.speak.start`, `io.voice.speak.end`, `lobe.fragment_stream` | `io.vision.state` |
 | benchmark | all topics of the loaded graph | — |
