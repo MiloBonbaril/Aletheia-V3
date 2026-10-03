@@ -43,3 +43,6 @@ services/lobe_frontal/eval/results/
 # Dump d'historique réel : conversations Discord de tiers, dépôt public
 services/lobe_frontal/eval/fixtures/
 *.bak
+
+# Mode debug de io_yeux : captures et réponses brutes, non masquées
+services/io_yeux/debug/

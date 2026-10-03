@@ -3,7 +3,7 @@
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from PIL import Image
@@ -174,3 +174,81 @@ def build_state(answer: dict, observed_at: int, trigger: str) -> dict:
         "activity": redact(str(answer["activity"]))[:MAX_ACTIVITY],
         "visible_text": [redact(str(text))[:MAX_TEXT] for text in texts[:MAX_TEXTS]],
     }
+
+
+def vlm_metrics(response: dict) -> dict:
+    """Prefill, génération et jetons de prompt, lus dans `timings` et `usage` de llama-server.
+    Les jetons de prompt comptent l'image et le texte : llama-server ne donne pas l'image seule,
+    mais elle en fait l'essentiel."""
+    timings = response.get("timings") or {}
+    usage = response.get("usage") or {}
+    return {
+        "prefill_ms": float(timings.get("prompt_ms", 0.0)),
+        "generation_ms": float(timings.get("predicted_ms", 0.0)),
+        "prompt_tokens": int(usage.get("prompt_tokens", timings.get("prompt_n", 0))),
+    }
+
+
+@dataclass
+class Stats:
+    """Les métriques d'une fenêtre de synthèse (60 s). Une nouvelle instance ouvre la fenêtre suivante."""
+    started: float
+    captures: int = 0
+    capture_s: float = 0.0
+    compare_s: float = 0.0
+    triggers: Counter = field(default_factory=Counter)
+    vlm_s: float = 0.0
+    prefill_ms: float = 0.0
+    generation_ms: float = 0.0
+    prompt_tokens: int = 0
+    state_bytes: int = 0
+    states: int = 0
+    suspended_s: float = 0.0
+    errors: int = 0
+
+    def capture(self, capture_s: float, compare_s: float) -> None:
+        self.captures += 1
+        self.capture_s += capture_s
+        self.compare_s += compare_s
+
+    def observation(self, trigger: str, vlm_s: float, metrics: dict, state_bytes: int) -> None:
+        self.triggers[trigger] += 1
+        self.vlm_s += vlm_s
+        self.prefill_ms += metrics["prefill_ms"]
+        self.generation_ms += metrics["generation_ms"]
+        self.prompt_tokens += metrics["prompt_tokens"]
+        self.state_bytes += state_bytes
+        self.states += 1
+
+    def republish(self, state_bytes: int) -> None:
+        self.triggers["republication"] += 1
+        self.state_bytes += state_bytes
+        self.states += 1
+
+    def suspended(self, seconds: float) -> None:
+        self.suspended_s += seconds
+
+    def error(self) -> None:
+        self.errors += 1
+
+    def summary(self, now: float) -> str:
+        minutes = max(now - self.started, 1e-9) / 60
+        captures = max(self.captures, 1)
+        observed = sum(n for trigger, n in self.triggers.items() if trigger != "republication")
+        parts = [
+            f"{self.captures / (minutes * 60):.1f} capture/s "
+            f"(capture {self.capture_s / captures * 1000:.0f} ms, comparaison {self.compare_s / captures * 1000:.0f} ms)",
+            ", ".join(f"{trigger} {n / minutes:.0f}/min" for trigger, n in sorted(self.triggers.items()))
+            or "aucune observation",
+            f"ignorées {(self.captures - observed) / captures * 100:.0f} %",
+        ]
+        if observed:
+            parts.append(
+                f"VLM {self.vlm_s / observed:.1f} s (prefill {self.prefill_ms / observed:.0f} ms, "
+                f"génération {self.generation_ms / observed:.0f} ms), "
+                f"{self.prompt_tokens / observed:.0f} jetons de prompt"
+            )
+        if self.states:
+            parts.append(f"état {self.state_bytes / self.states:.0f} o")
+        parts += [f"suspendu {self.suspended_s:.0f} s", f"erreurs {self.errors}"]
+        return " | ".join(parts)

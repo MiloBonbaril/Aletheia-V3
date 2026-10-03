@@ -63,6 +63,37 @@ A failure of `io_yeux` never stops the conversation, and you do not have to star
 - Each failure gives one log line, with no stack trace. A NATS error that does not change gives
   one line only.
 
+### Logs and debug mode
+
+The console of `services/terminal` shows the log of the service. Two lines help you to adjust the
+thresholds. They never show `activity` or `visible_text`, because these fields can contain a secret.
+
+One line for each observation: the trigger, the difference with the reference, the latency of the
+VLM, and `application`.
+
+```
+[io_yeux] 👁️ Observation (change, différence 0.04705, 0.6 s) : Blender
+```
+
+One summary line each 60 s: the captures each second, the latency of the capture and of the
+comparison, the observations each minute for each trigger, the percentage of captures with no VLM
+call, the latency of the VLM with the prefill and the generation (from the `timings` field of the
+`llama-server` answer), the prompt tokens (the image and the text: `llama-server` does not give the
+image alone), the mean size of the state, the suspended time, and the errors.
+
+```
+[io_yeux] 📊 1.0 capture/s (capture 35 ms, comparaison 4 ms) | change 13/min, heartbeat 1/min | ignorées 78 % | VLM 1.0 s (prefill 358 ms, génération 456 ms), 1041 jetons de prompt | état 242 o | suspendu 12 s | erreurs 0
+```
+
+There is no Prometheus, no NATS topic for the metrics, and no link with `services/benchmark`.
+
+**Debug mode:** set `IO_YEUX_DEBUG_DIR` (for example `debug`) to keep, for each observation, the
+image sent to the VLM (`<observed_at>-<trigger>.jpg`) and the raw answer of the VLM
+(`<observed_at>-<trigger>.json`). The raw answer is **before the masking**: it can contain a
+secret. The mode changes nothing else: the same observations, the same publications, the same
+logs. `services/io_yeux/debug/` is in `.gitignore`, because the repository is public. Delete the
+folder when you do not need it.
+
 ## 🔐 Authorization (one time, by hand)
 
 KWin refuses the capture from an executable that no `.desktop` file declares. The file
@@ -105,6 +136,7 @@ python main.py
 | `IO_YEUX_HEARTBEAT_SECONDS` | `30` | The time without publication after which the service looks at the screen again. |
 | `IO_YEUX_IDENTICAL_THRESHOLD` | `0.00005` | Below this difference, the screen is identical to the reference. On a 2560×1440 screen, a blinking cursor gives approximately 0.00004, and one error line in a terminal gives approximately 0.00012. |
 | `IO_YEUX_MAX_TOKENS` | `500` | The token limit of the answer. A limit that is too low cuts the JSON. |
+| `IO_YEUX_DEBUG_DIR` | not set | The folder of the debug mode. Not set: no file is written. |
 | `IO_YEUX_LLAMA_URL` | `http://127.0.0.1:8080/v1/chat/completions` | The chat endpoint of `llama-server`. |
 
 ### Privacy
