@@ -21,14 +21,28 @@ def difference(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.abs(a - b).mean())
 
 
-def decide(reference: np.ndarray | None, thumb: np.ndarray, threshold: float) -> str | None:
-    """Rend le déclencheur de l'observation, ou None s'il n'y a rien à observer.
+def decide(reference: np.ndarray | None, thumb: np.ndarray, threshold: float,
+           since_check: float, heartbeat: float, identical: float) -> str | None:
+    """Rend l'action à faire pour cette capture, ou None :
+
+    - "change" : l'écran diffère de la référence au-delà du seuil → observer ;
+    - "heartbeat" : heartbeat échu, écran légèrement différent → observer quand même, car une
+      ligne d'erreur dans un terminal peut rester sous le seuil ;
+    - "republish" : heartbeat échu, écran identique → pas de VLM, republier le dernier état avec
+      un checked_at neuf.
 
     `reference` est la vignette de la dernière observation réussie (None avant la première).
+    `since_check` est le temps écoulé depuis la dernière publication (observation ou republication).
+    Sous `identical`, l'écran est identique à la référence : la description reste vraie.
     """
-    if reference is None or difference(reference, thumb) > threshold:
+    if reference is None:
         return "change"
-    return None
+    diff = difference(reference, thumb)
+    if diff > threshold:
+        return "change"
+    if since_check < heartbeat:
+        return None
+    return "republish" if diff < identical else "heartbeat"
 
 
 def after_observation(reference: np.ndarray | None, thumb: np.ndarray, ok: bool) -> np.ndarray | None:

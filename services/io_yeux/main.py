@@ -20,6 +20,10 @@ LLAMA_URL = os.getenv("IO_YEUX_LLAMA_URL", "http://127.0.0.1:8080/v1/chat/comple
 CAPTURE_FPS = float(os.getenv("IO_YEUX_CAPTURE_FPS", "1"))
 SCREEN = os.getenv("IO_YEUX_SCREEN", "active")
 CHANGE_THRESHOLD = float(os.getenv("IO_YEUX_CHANGE_THRESHOLD", "0.02"))
+HEARTBEAT_SECONDS = float(os.getenv("IO_YEUX_HEARTBEAT_SECONDS", "30"))
+# Mesuré sur un écran 2560×1440 : écran inchangé 0, curseur qui clignote ~0,00004, une ligne
+# d'erreur de terminal ~0,00012. Au-dessus du seuil, le heartbeat observe au lieu de republier.
+IDENTICAL_THRESHOLD = float(os.getenv("IO_YEUX_IDENTICAL_THRESHOLD", "0.00005"))
 MAX_TOKENS = int(os.getenv("IO_YEUX_MAX_TOKENS", "500"))
 # ponytail: constantes plutôt qu'un .env — la spec les fixe, rien à accorder.
 VLM_SIZE = (1280, 720)
@@ -94,10 +98,13 @@ async def main():
         return
 
     print(f"   - Écran : {SCREEN}, {CAPTURE_FPS} capture/s, seuil={CHANGE_THRESHOLD}")
+    print(f"   - Heartbeat : {HEARTBEAT_SECONDS} s, écran identique sous {IDENTICAL_THRESHOLD}")
 
     bus = None
     last_capture_error = None
     reference = None
+    state = None  # le dernier état publié
+    last_check = time.monotonic()  # dernière publication : observation ou republication
     period = 1.0 / CAPTURE_FPS
     try:
         async with httpx.AsyncClient(timeout=VLM_TIMEOUT_SECONDS) as http:
@@ -120,15 +127,24 @@ async def main():
                 observed_at = int(time.time() * 1000)
                 thumb = await asyncio.to_thread(thumbnail, image)
 
-                trigger = decide(reference, thumb, CHANGE_THRESHOLD)
-                if trigger:
+                trigger = decide(reference, thumb, CHANGE_THRESHOLD,
+                                 time.monotonic() - last_check, HEARTBEAT_SECONDS, IDENTICAL_THRESHOLD)
+                if trigger == "republish":
+                    # Écran identique à la référence : la description reste vraie, pas de VLM.
+                    fresh = {**state, "checked_at": observed_at}
+                    try:
+                        await nc.publish("io.vision.state", json.dumps(fresh).encode())
+                        state, last_check = fresh, time.monotonic()
+                    except Exception as e:
+                        print(f"[io_yeux] ⚠️ Republication échouée : {type(e).__name__}: {e}")
+                elif trigger:
                     # Une seule observation en vol : la boucle l'attend, puis repart sur la frame
                     # la plus récente (latest-frame-wins par construction).
                     ok = False
                     try:
-                        state = await observe(http, image, observed_at, trigger)
-                        await nc.publish("io.vision.state", json.dumps(state).encode())
-                        ok = True
+                        new_state = await observe(http, image, observed_at, trigger)
+                        await nc.publish("io.vision.state", json.dumps(new_state).encode())
+                        state, last_check, ok = new_state, time.monotonic(), True
                         # Ni activity ni visible_text dans les logs : ils peuvent contenir un secret.
                         latency = time.monotonic() - started
                         print(f"[io_yeux] 👁️ Observation ({trigger}, {latency:.1f} s) : {state['application']}")

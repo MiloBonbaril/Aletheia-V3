@@ -33,8 +33,10 @@ Capture par KWin `ScreenShot2` : voir `docs/adr/0006-io-yeux-capture-par-kwin-sc
    - différence au-dessus du seuil → observation (`trigger: change`) ;
    - sinon, heartbeat échu (`IO_YEUX_HEARTBEAT_SECONDS`, 30 s) → observation
      (`trigger: heartbeat`), car une ligne d'erreur dans un terminal peut rester sous le seuil ;
-   - sauf si l'écran est strictement identique (différence < 0,002) : pas d'appel au VLM, on
-     republie le dernier état avec `checked_at` mis à jour.
+   - sauf si l'écran est identique (différence < `IO_YEUX_IDENTICAL_THRESHOLD`, 0,00005) : pas
+     d'appel au VLM, on republie le dernier état avec `checked_at` mis à jour. Mesuré sur un écran
+     2560×1440 : un curseur qui clignote donne ~0,00004, une ligne d'erreur ~0,00012. La valeur
+     initiale de 0,002 aurait pris cette ligne pour un écran identique.
 4. **Observation** : `POST http://127.0.0.1:8080/v1/chat/completions`, le llama-server en
    service, quel que soit le modèle (Gemma-4 ou Qwen3.5, tous deux multimodaux). Le prompt ne
    dépend d'aucun modèle.

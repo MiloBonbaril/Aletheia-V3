@@ -10,6 +10,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import after_observation, build_state, decide, difference, thumbnail
 
 
+# FRESH : dernière vérification à l'instant. DUE : heartbeat échu.
+FRESH = {"threshold": 0.02, "since_check": 0.0, "heartbeat": 30.0, "identical": 0.00005}
+DUE = {**FRESH, "since_check": 30.0}
+
+
 def frame(value: float) -> np.ndarray:
     return np.full((90, 160), value, dtype=np.float32)
 
@@ -26,23 +31,42 @@ def test_difference_is_mean_absolute_difference():
 
 
 def test_first_frame_is_observed():
-    assert decide(None, frame(0.0), threshold=0.02) == "change"
+    assert decide(None, frame(0.0), **FRESH) == "change"
 
 
 def test_below_threshold_is_not_observed():
-    assert decide(frame(0.0), frame(0.01), threshold=0.02) is None
+    assert decide(frame(0.0), frame(0.01), **FRESH) is None
 
 
 def test_above_threshold_is_observed():
-    assert decide(frame(0.0), frame(0.5), threshold=0.02) == "change"
+    assert decide(frame(0.0), frame(0.5), **FRESH) == "change"
 
 
 def test_slow_drift_ends_up_observed():
     # La référence est la dernière observation réussie, pas la frame précédente :
     # chaque pas reste sous le seuil, mais leur somme le franchit.
     reference = frame(0.0)
-    triggers = [decide(reference, frame(step * 0.01), threshold=0.02) for step in range(1, 4)]
+    triggers = [decide(reference, frame(step * 0.01), **FRESH) for step in range(1, 4)]
     assert triggers == [None, None, "change"]
+
+
+def test_below_threshold_before_the_heartbeat_does_nothing():
+    assert decide(frame(0.0), frame(0.01), **{**FRESH, "since_check": 29.9}) is None
+
+
+def test_heartbeat_observes_a_screen_slightly_different_from_the_reference():
+    # Une ligne d'erreur dans un terminal : ~0,00012 sur un écran 2560×1440.
+    assert decide(frame(0.0), frame(0.00012), **DUE) == "heartbeat"
+    assert decide(frame(0.0), frame(0.01), **DUE) == "heartbeat"
+
+
+def test_heartbeat_republishes_an_identical_screen_without_the_vlm():
+    assert decide(frame(0.0), frame(0.00004), **DUE) == "republish"  # un curseur qui clignote
+    assert decide(frame(0.0), frame(0.0), **DUE) == "republish"
+
+
+def test_a_change_wins_over_the_heartbeat():
+    assert decide(frame(0.0), frame(0.5), **DUE) == "change"
 
 
 def test_reference_moves_only_after_a_successful_observation():
@@ -50,7 +74,7 @@ def test_reference_moves_only_after_a_successful_observation():
     assert after_observation(old, new, ok=True) is new
     assert after_observation(old, new, ok=False) is old
     # Après un échec, la capture suivante est encore « différente » : nouvel essai.
-    assert decide(after_observation(old, new, ok=False), new, threshold=0.02) == "change"
+    assert decide(after_observation(old, new, ok=False), new, **FRESH) == "change"
 
 
 def test_build_state_copies_the_vlm_answer():

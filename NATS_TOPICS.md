@@ -339,9 +339,14 @@ a periodic decay to the neutral baseline.
 #### `io.vision.state`
 
 The description of the screen of the streamer. Fire-and-forget, with no `correlation_id`.
-`io_yeux` publishes it after each observation. The `lobe_frontal` keeps the last state in memory
-and injects it in a `<vision>` block at the start of the last user message. It ignores a state
-when `checked_at` is older than 90 s.
+`io_yeux` publishes it after each observation. It also publishes it again at each heartbeat
+(`IO_YEUX_HEARTBEAT_SECONDS`, 30 s) when the screen is identical to the reference: this
+republication does not call the VLM, keeps `observed_at`, and changes only `checked_at`. Thus
+`checked_at` stays less than approximately 30 s old while `io_yeux` operates.
+
+The `lobe_frontal` keeps the last state in memory and injects it in a `<vision>` block at the start
+of the last user message. It ignores a state when `checked_at` is older than 90 s: this rule
+detects only a stopped `io_yeux`, not a screen that does not change.
 
 - **Payload (JSON):**
   ```json
@@ -355,9 +360,12 @@ when `checked_at` is older than 90 s.
   }
   ```
 - `observed_at`: the time of the capture that the VLM described, in milliseconds since the epoch.
-- `checked_at`: the last time that `io_yeux` confirmed that the description is correct. It is
-  equal to `observed_at` for now.
-- `trigger`: the cause of the observation. The value is `change`.
+- `checked_at`: the last time that the local comparison confirmed that the description is correct.
+  It is equal to `observed_at` after an observation, and more recent after a republication.
+- `trigger`: the cause of the observation. `change`: the screen is different from the reference,
+  above the threshold. `heartbeat`: the heartbeat is due, and the screen is a little different
+  from the reference, below the threshold. A republication keeps the `trigger` of the
+  observation.
 - `application`: the name of the application in the foreground, 80 characters maximum.
 - `activity`: one sentence, 200 characters maximum.
 - `visible_text`: 5 items maximum, 80 characters maximum each, in the language of the screen.

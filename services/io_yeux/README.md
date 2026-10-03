@@ -11,6 +11,11 @@ only: it never speaks, it never starts the TTS, and it does not control the comp
 - **Change detection:** it reduces each capture to 160×90 in grayscale. It compares this copy with
   the **reference**: the capture of the last successful observation, not the previous capture.
   When the mean absolute difference is above `IO_YEUX_CHANGE_THRESHOLD`, it observes.
+- **Heartbeat:** when no publication occurred for `IO_YEUX_HEARTBEAT_SECONDS`, the service looks at
+  the difference again. If it is below `IO_YEUX_IDENTICAL_THRESHOLD`, the screen is identical: the
+  service publishes the last state again with a new `checked_at`, and it does not call the VLM. If
+  it is above, the service observes with `trigger: heartbeat`. Thus a small change, for example one
+  error line in a terminal, becomes an observation in 30 s maximum.
 - **Observation:** it sends the screen (JPEG, 1280×720 maximum, quality 85) to the `llama-server`
   on port 8080, with `temperature: 0`, no reasoning, and a fixed `json_schema`. The model of the
   server has no importance: Gemma-4 and Qwen3.5 are both multimodal. The prompt is factual, in
@@ -62,6 +67,8 @@ python main.py
 | `IO_YEUX_SCREEN` | `active` | `active` follows the screen that has the focus. A name (`DP-1`, `HDMI-A-1`) fixes one screen. |
 | `IO_YEUX_CAPTURE_FPS` | `1` | The number of captures each second. |
 | `IO_YEUX_CHANGE_THRESHOLD` | `0.02` | The mean absolute difference (0 to 1) above which the service observes. |
+| `IO_YEUX_HEARTBEAT_SECONDS` | `30` | The time without publication after which the service looks at the screen again. |
+| `IO_YEUX_IDENTICAL_THRESHOLD` | `0.00005` | Below this difference, the screen is identical to the reference. On a 2560×1440 screen, a blinking cursor gives approximately 0.00004, and one error line in a terminal gives approximately 0.00012. |
 | `IO_YEUX_MAX_TOKENS` | `500` | The token limit of the answer. A limit that is too low cuts the JSON. |
 | `IO_YEUX_LLAMA_URL` | `http://127.0.0.1:8080/v1/chat/completions` | The chat endpoint of `llama-server`. |
 
@@ -78,7 +85,8 @@ pytest tests/
 ```
 
 The tests cover the pure functions of `core.py`: the reduction, the difference, the decision to
-observe, the reference, and the construction of the payload. They need no server and no screen.
+observe (threshold, heartbeat, republication), the reference, and the construction of the payload.
+They need no server and no screen.
 
 ## 🔌 NATS interface
 
