@@ -420,7 +420,7 @@ Send a facial expression command to VTube Studio (`io_visage`).
 
 #### `io.chat.msg` (planned)
 
-An aggregated summary of the Twitch or YouTube chat (`io_yeux`).
+An aggregated summary of the Twitch or YouTube chat (`io_chat`).
 
 ---
 

@@ -81,7 +81,7 @@ server, for the cost, the privacy and the control of the model.
 - **Keyboard (text I/O):** a direct text input service. It creates `io.user.msg.text` events.
 - **Discord:** the gateway to the users. It sends the text, it streams the voice audio in the two
   directions, and it publishes the presence signal.
-- **Eyes (Twitch):** a chat aggregator that limits the quantity of context. It will publish
+- **Chat (Twitch):** a chat aggregator that limits the quantity of context. It will publish
   `io.chat.msg` events. Not implemented.
 - **Vocal cords (TTS):** `Audio8 TTS 0.6B`. It changes the text fragments into a real-time audio
   stream, in chunks that become longer, to keep the time to first audio low.

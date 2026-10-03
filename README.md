@@ -38,7 +38,7 @@ measure by hand.
 | io_text (terminal input) | `services/io_text` | Python | Operational |
 | benchmark (latency harness) | `services/benchmark` | Python | Operational |
 | terminal (local control panel) | `services/terminal` | Python | Operational (V0.1) |
-| io_yeux (eyes, chat aggregation) | `services/io_yeux` | — | Specification only |
+| io_chat (chat aggregation) | `services/io_chat` | — | Specification only |
 | io_visage (VTube Studio control) | `services/io_visage` | — | Specification only |
 
 The two last services contain a README file only. They have no source code.
@@ -73,7 +73,7 @@ flowchart TB
         oreilles["🎙️ io_oreilles (Ears / STT)<br/><i>Rust / Silero VAD / Whisper</i>"]:::ingress
         discord["💬 io_discord (Discord)<br/><i>Python / discord.py</i>"]:::ingress
         text_io["⌨️ io_text (Text I/O)<br/><i>Python / CLI</i>"]:::ingress
-        yeux["👁️ io_yeux (Eyes / Chat - Planned)"]:::ingress
+        chat["📺 io_chat (Chat - Planned)"]:::ingress
     end
 
     subgraph Event_Broker ["📡 EVENT BUS"]
@@ -111,7 +111,7 @@ flowchart TB
     oreilles -->|io.user.speak<br/>io.user.speak.raw| nats
     discord -->|io.user.msg.text<br/>io.discord.voice.frame<br/>io.presence.discord_voice| nats
     text_io -->|io.user.msg.text| nats
-    yeux -.->|io.chat.msg| nats
+    chat -.->|io.chat.msg| nats
 
     nats -->|ingress events| cortex
     nats -->|io.discord.voice.frame| oreilles

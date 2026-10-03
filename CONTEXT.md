@@ -67,7 +67,7 @@ _Avoid_: dashboard, panel, UI, terminal
 **Managed service**:
 One entry of `services/terminal/services.toml`. It is a process that the daemon starts as a child,
 or a Docker Compose stack that it starts detached. `llama-server` is a managed service, although it
-is not in `services/`. `io_visage` and `io_yeux` are not, because they have no source code.
+is not in `services/`. `io_visage` and `io_chat` are not, because they have no source code.
 _Avoid_: managed process, unit, target
 
 **Profile**:

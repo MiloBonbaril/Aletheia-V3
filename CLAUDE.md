@@ -105,7 +105,7 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   (`io.user.msg.text` out, `lobe.fragment_stream` in). See
   `docs/adr/0003-terminal-superviseur-de-processus-local.md` and
   `docs/adr/0004-le-terminal-publie-et-ecoute-un-seul-sujet.md`.
-- **io_yeux**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
+- **io_chat**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
   two contain a README file only. There is no source code.
 
 Each service starts independently. Each one has its own `requirements.txt` (Python) or `Cargo.toml`

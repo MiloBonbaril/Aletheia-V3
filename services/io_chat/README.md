@@ -1,6 +1,6 @@
-# 👁️ I/O Yeux (Twitch and YouTube)
+# 📺 I/O Chat (Twitch and YouTube)
 
-The sensor that observes the virtual world.
+The sensor that reads the chat of the stream.
 
 > **Status: specification only.** This directory contains this file. There is no source code.
 

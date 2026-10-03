@@ -35,8 +35,8 @@ def test_manifest_loads_and_resolves_paths():
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
     names = [e.name for e in manifest.entries]
     assert "cortex" in names and "llama-server" in names
-    # io_visage, io_yeux and terminal have no source code: they are not managed.
-    assert not {"io_visage", "io_yeux", "terminal"} & set(names)
+    # io_visage, io_chat and terminal have no source code: they are not managed.
+    assert not {"io_visage", "io_chat", "terminal"} & set(names)
     cortex = next(e for e in manifest.entries if e.name == "cortex")
     assert cortex.cwd == (ROOT / "services/cortex").resolve()
     assert cortex.rebuild == ["cargo", "build", "--release"]
