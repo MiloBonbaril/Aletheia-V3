@@ -235,6 +235,8 @@ async fn main() -> Result<()> {
     // parle encore — sinon Aletheia répondrait à une demi-phrase et lui couperait la parole.
     let (tx_speech, mut rx_speech) = mpsc::channel::<(Vec<f32>, Option<String>, bool)>(32);
 
+    // Le flux cpal vit hors du bloc : le détruire à la fin du bloc coupe la capture du micro.
+    let mut _mic_stream = None;
     if !discord_mode {
     // 3. Setup Ringbuf for Thread 1 -> Thread 2
     // Arbitrary size: 160_000 samples is 10s at 16kHz, roughly 3.3s at 48kHz.
@@ -291,6 +293,7 @@ async fn main() -> Result<()> {
     };
 
     stream.play()?;
+    _mic_stream = Some(stream);
 
     info!("Initializing Silero VAD Model...");
     use silero::{Session, StreamState, SampleRate as SileroSampleRate};
