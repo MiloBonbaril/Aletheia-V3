@@ -96,9 +96,9 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   three prompt files of `lobe_frontal`. The `Kanban` tab has two boards: `Tickets` reads and writes
   the `tickets/` folder, and `Issues` reads the GitHub issues through `gh`. Some manifest entries
   come in pairs that must never run together, because they share a device or a port:
-  `io_oreilles` / `io_oreilles_discord`, `io_voix` / `io_voix_muet`, and `llama-server` /
-  `llama-server-qwen` (port 8080). `tests/test_terminal.py` checks the profiles against these
-  pairs. The daemon kills every service when it
+  `io_oreilles` / `io_oreilles_discord`, `io_voix` / `io_voix_muet`, and the three entries `llama-server`,
+  `llama-server-qwen` and `llama-server-bonsai` (port 8080). `tests/test_terminal.py` checks the profiles against these
+  groups. The daemon kills every service when it
   stops, and it never restarts a crashed one. It reads the bus figures through the monitoring
   endpoint of NATS (`/varz`, `/connz`), never through a subscription. A `Chat` tab does the work of
   `io_text` from the browser: it is the only part that touches the bus, and it uses two topics only
