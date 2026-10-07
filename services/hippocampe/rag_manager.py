@@ -12,7 +12,9 @@ RAG_SCORE_THRESHOLD = float(os.getenv("RAG_SCORE_THRESHOLD", "0.5"))
 class RAGManager:
     def __init__(self):
         print("Initializing SentenceTransformers model...")
-        self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
+        # Sur CPU : sur GPU, ce modèle de 22 M de paramètres coûte 414 Mio de VRAM (le contexte
+        # CUDA surtout) pour gagner 3 ms par requête (6,1 ms contre 9,9 ms, mesuré).
+        self.encoder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
         # Warm-up: force le chargement complet du modèle ONNX
         self.encoder.encode(["warmup"], show_progress_bar=False)
         self._embedding_dim = self.encoder.get_sentence_embedding_dimension()

@@ -40,6 +40,11 @@ os.environ.setdefault(
     "TORCHINDUCTOR_CACHE_DIR",
     os.path.join(os.path.dirname(__file__), "models", ".inductor-cache"),
 )
+# Le décodage cumulatif alloue des tampons de plus en plus grands à chaque chunk. L'allocateur
+# par défaut garde ces blocs et les découpe mal : mesuré à 4,6-5,3 Go après six fragments, pour
+# 1,1 Go réellement alloué. Avec des segments extensibles le processus reste à 2,8 Go, sans
+# écart de TTFA ni de RTF mesurable. À définir avant l'import de torch, comme le cache ci-dessus.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 import torch.nn.functional as F
@@ -234,12 +239,11 @@ def build_engine() -> Engine:
         _compile_hot_loops(model)
     _pin_generation_caches(model)
 
-    # Le codec reste en float32. Il est plus précis ET plus rapide que bfloat16 ici
-    # (127 ms contre 337 ms pour 67 frames : les convolutions bf16 tombent sur de
-    # mauvais kernels). La précision compte parce qu'on redécode le préfixe à chaque
-    # chunk : en float32 l'écart au raccord tombe à 2e-5, soit -94 dBFS, inaudible.
-    codec = model.load_codec(dtype=torch.float32)
-    codec.to(device=model.device, dtype=torch.float32)
+    # Le codec en bfloat16, le type du modèle. Mesuré sur 200 frames : bf16 71 ms, fp32 122 ms.
+    # Le fp16 est aussi rapide et dix fois plus précis au raccord (3,8e-3 contre 4,4e-2), mais
+    # cuDNN y paie environ 300 ms à chaque nouvelle longueur décodée, et le décodage cumulatif
+    # en produit sans cesse. Le bf16 paie environ 50 ms, le fp32 presque rien.
+    codec = model.load_codec()
 
     reference_codes = None
     if VOICE_WAV:
@@ -254,6 +258,15 @@ def build_engine() -> Engine:
             "   varie de 108 à 215 Hz d'une phrase à l'autre, soit un locuteur différent à\n"
             "   chaque fois. Donnez une référence pour figer la voix (écart ramené à 2 %)."
         )
+
+    # L'encodeur du codec ne sert qu'à la voix de référence, déjà encodée : 395 Mio rendus.
+    # `decode` ne passe ni par `encoder`, ni par `pre_module`, ni par `downsample` : la
+    # sortie est identique au bit près.
+    codec.encoder = None
+    codec.quantizer.pre_module = None
+    codec.quantizer.downsample = None
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return Engine(
         model=model,
@@ -270,7 +283,7 @@ def _decode(engine: Engine, codes: torch.Tensor) -> torch.Tensor:
     """Décode les codes en forme d'onde.
 
     On n'utilise pas `model.decode_audio` : elle re-caste le codec vers `model.dtype`
-    (bfloat16) à chaque appel, ce qui annulerait le float32 choisi plus haut.
+    (bfloat16) à chaque appel. Le type du codec se choisit une fois, dans `build_engine`.
     """
     with torch.inference_mode():
         return engine.codec.decode(codes)[0, 0].float()

@@ -121,6 +121,32 @@ INT8 needs the CUDA graphs, and it needs one generic graph for the Fast AR. With
 graphs, or in eager mode, INT8 is **slower** than bfloat16 (122 ms per frame against 94 ms in eager).
 The quantization pays only when the compiler can fuse the dequantization into the matrix product.
 
+The peak VRAM values above come from an earlier codec setup. See the next section for the current
+values.
+
+### VRAM
+
+Two settings in `engine.py` keep the VRAM low. Measured on an RTX 5070 Ti, after six fragments
+(short and long), with a game on the GPU:
+
+| | Process VRAM | Start peak | Median TTFA | Median real-time factor |
+|---|---|---|---|---|
+| Before the two settings | 4.6 to 5.3 GB | 2.94 GB | 200 to 238 ms | 0.43 to 0.55 |
+| With the two settings | **2.8 GB** | **2.18 GB** | 201 to 204 ms | 0.45 to 0.47 |
+
+The speed difference is in the noise of the measurement.
+
+1. **`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.** The service decodes each fragment again
+   from frame 0, thus each chunk allocates larger buffers. The default allocator of PyTorch keeps
+   these blocks: 1.1 GB allocated, but up to 3.4 GB reserved. This setting gives the most gain.
+2. **No codec encoder after the start.** The encoder (395 MiB) encodes the reference voice only.
+   The service removes it after the reference. The decoded audio does not change.
+
+The codec runs in bfloat16, the type of the model. Do not change it to float16: float16 is as fast
+and more precise at the joint between two chunks (3.8e-3 against 4.4e-2), but cuDNN needs
+approximately 300 ms for each new decode length. The cumulative decode makes new lengths all the
+time. Float32 costs 250 MiB more and it is slower (122 ms against 71 ms for 200 frames).
+
 ### Environment variables
 
 | Variable | Default | Function |
