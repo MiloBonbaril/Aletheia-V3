@@ -50,3 +50,17 @@ def decode_speak_audio(payload: dict) -> bytes | None:
     if not audio_b64:
         return None
     return base64.b64decode(audio_b64)
+
+
+def speak_events(payload: dict) -> tuple[dict, dict]:
+    """Les payloads `io.voice.speak.start` et `.end` d'un fragment que io_discord joue.
+
+    C'est le processus qui joue le son qui les publie : en mode Discord, io_voix est muet,
+    donc seul io_discord sait quand Aletheia commence et finit de parler.
+    """
+    common = {
+        "sequence": payload.get("sequence", 0),
+        "is_last": payload.get("is_last", False),
+        "correlation_id": payload.get("correlation_id", ""),
+    }
+    return {**common, "text": payload.get("text", "")}, common

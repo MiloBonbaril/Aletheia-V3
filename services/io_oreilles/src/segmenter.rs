@@ -2,7 +2,7 @@
 //! driven by any audio source (one `VadSegmenter` instance per source).
 
 const SPEECH_PROB_THRESHOLD: f32 = 0.5;
-const SILENCE_FRAMES_TO_END: u32 = 20; // ~600ms of 512-sample @16kHz frames
+pub const SILENCE_FRAMES_TO_END: u32 = 20; // ~600ms of 512-sample @16kHz frames
 /// A segment carrying less speech than this never reaches Whisper. One frame above the
 /// threshold used to open a segment, and Whisper always returns *something*: a 160ms cough
 /// came back as "Merci d'avoir regardé cette vidéo !", a 224ms one as "Salut !". `main.rs`

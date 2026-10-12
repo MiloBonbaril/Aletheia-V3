@@ -110,11 +110,55 @@ impl SpeakerPipeline {
 
         ended
     }
+
+    /// Closes the open turn of a speaker whose frames stopped: the member left the channel, or
+    /// the bot left it. `SilenceGeneratorSink` sends silence only while the member is present, so
+    /// without this the turn never gets its silence tail and its text stays held for ever.
+    /// The silence goes straight to the segmenter: Silero has nothing to score in it.
+    /// Returns the last segment of the turn, or `None` when no turn was open (or it was a cough).
+    pub fn flush(&mut self) -> Option<Vec<f32>> {
+        let silence = [0.0_f32; 512];
+        for _ in 0..=crate::segmenter::SILENCE_FRAMES_TO_END {
+            match self.segmenter.push_frame(&silence, 0.0) {
+                FrameOutcome::SpeechEnded(segment) => return Some(segment),
+                FrameOutcome::Idle | FrameOutcome::SpeechDiscarded { .. } => return None,
+                _ => {}
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn speak(p: &mut SpeakerPipeline, frames: usize) {
+        for _ in 0..frames {
+            p.segmenter.push_frame(&[0.5; 512], 0.9);
+        }
+    }
+
+    #[test]
+    fn flush_closes_the_turn_of_a_speaker_who_left() {
+        let mut p = SpeakerPipeline::new().unwrap();
+        speak(&mut p, 13);
+        assert!(p.flush().is_some(), "the open turn must come out");
+        assert!(p.flush().is_none(), "a closed turn gives nothing more");
+    }
+
+    #[test]
+    fn flush_of_a_silent_speaker_gives_nothing() {
+        let mut p = SpeakerPipeline::new().unwrap();
+        assert!(p.flush().is_none());
+    }
+
+    #[test]
+    fn flush_still_discards_a_cough() {
+        let mut p = SpeakerPipeline::new().unwrap();
+        speak(&mut p, 1);
+        assert!(p.flush().is_none());
+    }
 
     #[test]
     fn downmixes_stereo_silence_to_zero() {

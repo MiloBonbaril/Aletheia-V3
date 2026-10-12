@@ -37,10 +37,11 @@ synthesizes the voice. Thus:
 - `cortex.interaction.started` suspends the observations. It also cancels the observation in
   progress: the service closes the HTTP connection, and `llama-server` stops the task. A test on
   `llama-server` showed that this operates without `stream: true`.
-- If `io_voix` is active (an `io.voice.speak.start` or `.end` in the last 10 minutes), the
-  suspension stops at `io.voice.speak.end` with `is_last: true`. `io_voix` always publishes it,
-  also after `stay_silent`.
-- If `io_voix` is not active, the suspension stops at `lobe.fragment_stream` with `is_last: true`.
+- If a player is active (an `io.voice.speak.start` or `.end` in the last 10 minutes), the
+  suspension stops at `io.voice.speak.end` with `is_last: true`. The player is `io_voix` with local
+  playback, or `io_discord` in the Discord mode. It always publishes this event, also after
+  `stay_silent`.
+- If no player is active, the suspension stops at `lobe.fragment_stream` with `is_last: true`.
 - In all cases, the suspension stops 30 s after its start.
 
 During the suspension, the capture continues, but there is no observation and no heartbeat. At the

@@ -39,7 +39,13 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `hippocampe.context.ready` before the inference. It builds the XML system prompt with
   `src/prompt_builder.py`. It cuts the answer at punctuation marks and streams the fragments on
   `lobe.fragment_stream`. It controls the function calling (`save_to_memory`, `get_from_memory`,
-  `stay_silent`, `set_mood`). It answers `lobe.topic.generate` for the proactivity of `limbic`. An
+  `stay_silent`, `set_mood`). It answers `lobe.topic.generate` for the proactivity of `limbic`.
+  It answers one message at a time, from a queue where **the last message wins**: the messages that
+  arrive while it is busy wait; when it is free, it answers the last user message only and writes
+  the others to the history with no answer. It stays busy until Aletheia stops speaking
+  (`io.voice.speak.end` with `is_last`). A proactive prompt gives its place to a user message, and a
+  proactive prompt that waited is dropped. `src/turn_queue.py` holds the choice; `NATS_TOPICS.md`
+  (`cortex.prompt`) gives the rules. An
   embedded Textual TUI (`tui.py`) shows the prompt, the output and the tool activity. The persona,
   the knowledge and the user data are Markdown files in `config/` (`PERSONA.md`, `MEMORY.md`,
   `USER.md`). An edit changes the behavior with no code change and with no restart:
@@ -67,11 +73,15 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   `io.user.speak`. The default model is `whisper-large-v3-turbo` (`model/whisper-large-turbo-ct2`,
   `INT8_FLOAT16`), and the default language is `fr`: the language detection costs 79 ms more for
   each segment. With `--discord`, it processes the per-speaker PCM audio from `io_discord` instead
-  of the local microphone. The GPU build (`--features cuda`) is necessary for real-time speech.
+  of the local microphone, with one VAD pipeline for each speaker. A speaker with no frame for 1 s
+  has left: the service closes the open turn of that speaker and publishes it. The GPU build
+  (`--features cuda`) is necessary for real-time speech.
   `src/bin/bench_stt.rs` measures the STT alone. See `docs/audits/io_oreilles-2026-09-07.md`.
 - **io_voix** (Python) — TTS with Audio8 TTS Preview 0.6B on the GPU (torch, INT8 weight-only). It
   consumes `lobe.fragment_stream`. It publishes the audio on `io.voice.speak.audio`, and the time
-  references on `io.voice.speak.start` and `.end`. It downloads the model (approximately 1.3 GB)
+  references on `io.voice.speak.start` and `.end` only when it plays the sound itself: with
+  `MUTE_LOCAL_PLAYBACK` (the `discord` profile), `io_discord` plays it and publishes them. It
+  downloads the model (approximately 1.3 GB)
   into `models/audio8-tts-0.6b/` at the first start. The model is autoregressive, thus `engine.py`
   gives the audio of one fragment in chunks that become longer, to keep the time to first audio low
   (120 ms end to end, real-time factor 0.22). The GPU is necessary, and the CUDA graphs of
@@ -82,11 +92,14 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   invents a new voice for each fragment: give one.
 - **io_discord** (Python) — the Discord gateway (`bot.py`, cogs in `cogs/`). It bridges Discord and
   `io.user.msg.text` / `lobe.fragment_stream`. It also streams the voice audio in the two
-  directions, publishes the voice presence, and holds an independent bets function.
+  directions, publishes the voice presence, and holds an independent bets function. It publishes
+  `io.voice.speak.start` and `.end` around its own playback of Aletheia's voice.
 - **io_text** — a terminal CLI that injects `io.user.msg.text` events. It is a multi-line editor
   with the `:w`, `:q` and `:c` commands.
 - **benchmark** (`services/benchmark`) — it subscribes passively to NATS with an event graph
-  (`graphs/E2E.json`, `graphs/T2T.json`) and rebuilds the end-to-end latency of a message.
+  (`graphs/E2E.json`, `graphs/T2T.json`) and rebuilds the end-to-end latency of a message. It
+  matches the events to a request with the `correlation_id`, thus two requests that overlap do not
+  mix.
 - **terminal** (`services/terminal`, Python) — the local control panel. A **daemon** (aiohttp) owns
   the processes of the other services and serves a **console** (Preact, no build step) on
   `127.0.0.1:7420`. It starts, stops, rebuilds and monitors each service, and it keeps a buffer of
@@ -178,11 +191,11 @@ docker compose down
 ### Tests
 
 There is no repository-level test runner, no linter and no formatter. Some services have their own
-tests, and they cover the pure functions only. `benchmark`, `io_text` and `io_oreilles` have no
-Python test; the Rust tests of `io_oreilles` are in `src/`:
+tests, and they cover the pure functions only. `io_text` and `io_oreilles` have no Python test; the
+Rust tests of `io_oreilles` are in `src/`:
 
 ```bash
-cd services/<name> && pytest tests/     # io_discord, io_voix, io_yeux, limbic, lobe_frontal, hippocampe
+cd services/<name> && pytest tests/     # benchmark, io_discord, io_voix, io_yeux, limbic, lobe_frontal, hippocampe
 cd services/cortex && cargo test        # cortex (also io_oreilles)
 cd services/terminal && ../../venv/bin/python -m pytest tests/   # terminal
 ```
@@ -194,7 +207,9 @@ Each service reads its own `.env` file. The Python services use `python-dotenv`.
 **Important:** only `benchmark`, `io_oreilles`, `io_yeux` and `limbic` read `NATS_URL`. The other services have
 the address `nats://localhost:4222` in their source code.
 
-- lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`
+- lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`.
+  Keep `MAX_CONCURRENT_INFERENCE` at 1: llama-server runs with `--parallel 1`, and the value 2 lets
+  a `lobe.topic.generate` run during a turn.
 - hippocampe: `POSTGRES_URL`, `QDRANT_URL`, `QDRANT_PORT`, `RAG_SCORE_THRESHOLD`. The
   `export_data.py` and `import_data.py` scripts read `POSTGRES_HOST`, `POSTGRES_PORT`,
   `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` instead of `POSTGRES_URL`.

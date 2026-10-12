@@ -15,10 +15,12 @@ written in **Rust**.
   one text only, at the end of the turn (see below).
 - **Attack of the first word:** the segment starts 224 ms before the decision of the VAD, so the
   start of the first word is not lost.
-- **Event output:** it publishes the text on `io.user.speak` at the end of each complete sentence.
+- **Event output:** it publishes the text on `io.user.speak` at the end of each turn of speech.
 - **Discord mode:** with the `--discord` flag, it processes the audio of a Discord voice channel. It
   runs an independent VAD pipeline for each speaker. Thus a person who stops to speak does not cut
-  the sentence of a different person. The events carry the name of the speaker.
+  the sentence of a different person. The events carry the name of the speaker. When no frame
+  comes from a speaker for 1 s, the speaker has left (the member left the channel, or the bot left
+  it): the service closes the open turn of that speaker, publishes it, and removes the pipeline.
 
 ## ⚙️ Configuration and start
 
@@ -272,7 +274,11 @@ cargo test
 The tests cover the mode selection, the construction of the transcription event, the stereo to
 mono downmix of the Discord audio, and the VAD segmentation of `src/segmenter.rs`: the start and the
 end of a segment, the discard of a burst too short to be a word, the forced cut of a long turn, and
-the preroll.
+the preroll. They also cover `SpeakerPipeline::flush`, which closes the turn of a speaker who left.
+
+The toolchain of this machine is in `/mnt/forge/.rustup`. A shell that does not read `~/.zshrc`
+must set `RUSTUP_HOME=/mnt/forge/.rustup` and `CARGO_HOME=/mnt/forge/.cargo`, or `rustup` finds no
+toolchain.
 
 ## 🔌 NATS interface
 

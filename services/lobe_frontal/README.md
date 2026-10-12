@@ -10,6 +10,14 @@ LLM and it structures the thought of the entity.
 - **Context synchronization:** it waits for `hippocampe.context.ready` for the related
   `correlation_id` before it starts the inference. If the memory does not answer, it continues with
   no history.
+- **Queue, the last message wins:** it answers one message at a time. It stays busy from the start
+  of a turn until Aletheia stops speaking (`io.voice.speak.end` with `is_last`). The messages that
+  arrive while it is busy wait. When it is free, it answers the last user message only, and writes
+  the other messages to the history with no answer. For the answered message, it asks the
+  hippocampe for the context again, because the context of its arrival time does not hold the last
+  answer. A proactive prompt gives its place to a user message, and a proactive prompt that waited
+  is dropped. With no TTS, the queue opens 1 s after the last fragment; in all cases, 60 s after it.
+  See `src/turn_queue.py` and `docs/audits/io_oreilles-discord-multi-speaker-2026-10-12.md`.
 - **Prompt construction:** it builds an XML system prompt. See [`PROMPTING.md`](../../PROMPTING.md).
 - **Fragment streaming:** it cuts the answer at strong punctuation marks and publishes each fragment
   on `lobe.fragment_stream`. This decreases the time to first audio.
@@ -44,7 +52,7 @@ The NATS address is in the source code. The service does not read `NATS_URL`.
 | `TEMPERATURE` | `0.9` | The sampling temperature. |
 | `TOP_P` | `0.95` | The nucleus sampling value. |
 | `REASONING_EFFORT` | `default` | The initial reasoning effort. The TUI can change it. |
-| `MAX_CONCURRENT_INFERENCE` | `1` | The maximum number of inferences at the same time. |
+| `MAX_CONCURRENT_INFERENCE` | `1` | The maximum number of inferences at the same time. Keep 1: a turn and a `lobe.topic.generate` share llama-server, which runs with `--parallel 1`. The queue answers one message at a time with any value. |
 
 The `.env` file also contains an `INTERFACE` variable and the Groq and Mistral API keys. The code
 does not use them. `main.py` selects `OpenAIInterface` at import time. This is a decision, not a
@@ -150,7 +158,9 @@ server.
 ## 🔌 NATS interface
 
 - **Subscribes to:** `cortex.prompt` (queue `lobe_workers`), `hippocampe.context.ready`,
-  `limbic.mood.update`, `io.vision.state`, `lobe.topic.generate` (queue `lobe_workers`,
-  request-reply)
-- **Publishes on:** `lobe.fragment_stream`, `hippocampe.history.add`, `limbic.mood.set`
-- **Requests:** `hippocampe.rag.query`, `hippocampe.rag.add`
+  `limbic.mood.update`, `io.vision.state`, `io.voice.speak.start`, `io.voice.speak.end`,
+  `lobe.topic.generate` (queue `lobe_workers`, request-reply)
+- **Publishes on:** `lobe.fragment_stream` (with the `correlation_id`), `hippocampe.history.add`,
+  `hippocampe.context.build` (for a message that waited), `limbic.mood.set`
+- **Requests:** `hippocampe.rag.query`, `hippocampe.rag.add`, `hippocampe.history.add` (the
+  skipped messages and the final answer)

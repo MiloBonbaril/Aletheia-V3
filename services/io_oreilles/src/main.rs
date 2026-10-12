@@ -493,31 +493,66 @@ async fn main() -> Result<()> {
 
         let tx_speech_discord = tx_speech.clone();
         std::thread::spawn(move || {
+            use std::collections::hash_map::Entry;
+            use std::sync::mpsc::RecvTimeoutError;
+            use std::time::{Duration, Instant};
+
+            // ponytail: une seconde sans trame veut dire que le membre est parti.
+            // `SilenceGeneratorSink` comble les silences tant qu'il est là, donc un trou ne vient
+            // que d'un départ, d'un `/voice leave` ou d'un io_discord mort. Plafond assumé : une
+            // coupure réseau de plus d'une seconde ferme le tour trop tôt, et la suite devient
+            // un second message.
+            const SPEAKER_GONE_AFTER: Duration = Duration::from_secs(1);
+
             info!("Started Discord per-speaker VAD thread");
-            let mut pipelines: std::collections::HashMap<String, (String, SpeakerPipeline)> =
+            let mut pipelines: std::collections::HashMap<String, (String, SpeakerPipeline, Instant)> =
                 std::collections::HashMap::new();
 
-            while let Ok((speaker_id, speaker_name, mono_48k)) = rx_frame.recv() {
-                use std::collections::hash_map::Entry;
-                let (name, pipeline) = match pipelines.entry(speaker_id) {
-                    Entry::Occupied(e) => e.into_mut(),
-                    Entry::Vacant(e) => match SpeakerPipeline::new() {
-                        Ok(p) => e.insert((speaker_name.clone(), p)),
-                        Err(err) => fatal("initialisation du pipeline d'un locuteur Discord", err),
-                    },
-                };
-                *name = speaker_name;
+            let send = |chunk: Vec<f32>, name: &str, is_final: bool| {
+                if is_final {
+                    info!("Speech ended for {}. Captured {} samples.", name, chunk.len());
+                } else {
+                    info!("Speech still running for {}. Forced cut at {} samples.", name, chunk.len());
+                }
+                if let Err(e) = tx_speech_discord.blocking_send((chunk, Some(name.to_string()), is_final)) {
+                    fatal("le fil STT ne reçoit plus les segments Discord", e);
+                }
+            };
 
-                for (chunk, is_final) in pipeline.push_mono_48k(&mut session, &mono_48k) {
-                    if is_final {
-                        info!("Speech ended for {}. Captured {} samples.", name, chunk.len());
-                    } else {
-                        info!("Speech still running for {}. Forced cut at {} samples.", name, chunk.len());
+            loop {
+                match rx_frame.recv_timeout(SPEAKER_GONE_AFTER) {
+                    Ok((speaker_id, speaker_name, mono_48k)) => {
+                        let (name, pipeline, seen) = match pipelines.entry(speaker_id) {
+                            Entry::Occupied(e) => e.into_mut(),
+                            Entry::Vacant(e) => match SpeakerPipeline::new() {
+                                Ok(p) => e.insert((speaker_name.clone(), p, Instant::now())),
+                                Err(err) => fatal("initialisation du pipeline d'un locuteur Discord", err),
+                            },
+                        };
+                        *name = speaker_name;
+                        *seen = Instant::now();
+
+                        for (chunk, is_final) in pipeline.push_mono_48k(&mut session, &mono_48k) {
+                            send(chunk, name, is_final);
+                        }
                     }
-                    if let Err(e) =
-                        tx_speech_discord.blocking_send((chunk, Some(name.clone()), is_final))
-                    {
-                        fatal("le fil STT ne reçoit plus les segments Discord", e);
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+
+                // Le pipeline d'un membre parti est fermé puis retiré : son dernier tour sort, et
+                // un retour plus tard repart sur un état neuf au lieu de recoller l'ancien audio.
+                let gone: Vec<String> = pipelines
+                    .iter()
+                    .filter(|(_, (_, _, seen))| seen.elapsed() >= SPEAKER_GONE_AFTER)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                for id in gone {
+                    if let Some((name, mut pipeline, _)) = pipelines.remove(&id) {
+                        info!("No frame from {} for {:?}: the speaker left.", name, SPEAKER_GONE_AFTER);
+                        if let Some(segment) = pipeline.flush() {
+                            send(segment, &name, true);
+                        }
                     }
                 }
             }

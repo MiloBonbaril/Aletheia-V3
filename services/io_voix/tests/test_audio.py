@@ -115,3 +115,17 @@ def test_queue_fragment_marks_an_empty_stream_as_both_ends():
     assert pieces == []
     assert len(queued) == 1
     assert queued[0] == AudioChunk(queued[0].samples, 2, "", True, True, True)
+
+
+def test_an_empty_last_fragment_still_gives_an_audio_message():
+    """io_discord apprend la fin d'une réponse par ce message : sans lui, il ne publierait
+    jamais `io.voice.speak.end`, et le lobe_frontal attendrait son plafond de 60 s."""
+    assert encode_wav_b64(np.zeros(0, dtype=np.float32), 44100) == ""
+
+
+def test_queue_fragment_carries_the_correlation_id_to_the_player():
+    queued = []
+
+    queue_fragment([_chunk(4)], 1, "x", True, queued.append, "corr-1")
+
+    assert all(item.correlation_id == "corr-1" for item in queued)

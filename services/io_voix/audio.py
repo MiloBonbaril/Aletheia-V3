@@ -24,9 +24,10 @@ class AudioChunk(NamedTuple):
     is_last: bool
     first: bool
     final: bool
+    correlation_id: str = ""
 
 
-def queue_fragment(chunks, sequence: int, text: str, is_last: bool, put) -> list:
+def queue_fragment(chunks, sequence: int, text: str, is_last: bool, put, correlation_id: str = "") -> list:
     """Met en file les tranches d'un fragment au fur et à mesure, bornées start/end.
 
     `put` est appelé dès qu'une tranche est prête, donc la carte son commence à jouer
@@ -36,18 +37,25 @@ def queue_fragment(chunks, sequence: int, text: str, is_last: bool, put) -> list
     pieces = []
     try:
         for chunk in chunks:
-            put(AudioChunk(chunk, sequence, text, is_last, not pieces, False))
+            put(AudioChunk(chunk, sequence, text, is_last, not pieces, False, correlation_id))
             pieces.append(chunk)
     finally:
         # Le marqueur de fin part même si la synthèse casse en cours de route. Sinon
         # `io.voice.speak.end` manquerait, et le benchmark attendrait un événement qui
         # n'arrive jamais.
-        put(AudioChunk(EMPTY, sequence, text, is_last, not pieces, True))
+        put(AudioChunk(EMPTY, sequence, text, is_last, not pieces, True, correlation_id))
     return pieces
 
 
 def encode_wav_b64(samples, sample_rate: int) -> str:
-    """Encode un tableau de samples float32 mono en WAV base64, pour publication NATS."""
+    """Encode un tableau de samples float32 mono en WAV base64, pour publication NATS.
+
+    Un tableau vide donne une chaîne vide : le dernier fragment d'une réponse est souvent
+    vide, et il doit quand même partir sur `io.voice.speak.audio`, sinon le lecteur
+    (io_discord) ne sait jamais que la réponse est finie.
+    """
+    if samples.size == 0:
+        return ""
     buf = io.BytesIO()
     sf.write(buf, samples, sample_rate, format="WAV")
     return base64.b64encode(buf.getvalue()).decode()

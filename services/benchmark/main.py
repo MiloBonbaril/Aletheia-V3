@@ -26,6 +26,36 @@ console = Console()
 # Global state for transactions
 active_transactions = {}
 completed_transactions = []
+# Every correlation_id already bound to a transaction, even a finished one: a late event of a
+# finished request must not steal a transaction that has no correlation_id yet.
+seen_correlation_ids = set()
+
+
+def match_transaction(active: dict, payload, seen: set):
+    """Finds the transaction of a non-ingress event.
+
+    The ingress topics carry no correlation_id: the cortex makes it. Thus the first event that
+    carries a new correlation_id (cortex.prompt) binds it to the oldest transaction that has none,
+    because the cortex dispatches in the order of arrival. After that, the correlation_id alone
+    finds the transaction: two requests that overlap (two Discord speakers) no longer mix.
+    An event with no correlation_id goes to the newest transaction, as before.
+    """
+    if not active:
+        return None
+    corr = payload.get("correlation_id") if isinstance(payload, dict) else None
+    if not corr:
+        return active[list(active.keys())[-1]]
+    for tx in active.values():
+        if tx.get("correlation_id") == corr:
+            return tx
+    if corr in seen:
+        return None
+    for tx in active.values():
+        if not tx.get("correlation_id"):
+            tx["correlation_id"] = corr
+            seen.add(corr)
+            return tx
+    return None
 
 class BenchmarkGraph:
     def __init__(self, filepath):
@@ -369,11 +399,7 @@ async def main():
                 active_transactions[tx_id] = current_tx
                 console.print(f"\n[bold cyan]🚀 [NOUVEAU FLUX DÉTECTÉ] sur {topic}[/bold cyan]")
             else:
-                # Match to the most recent active transaction
-                if active_transactions:
-                    # Get the newest active transaction
-                    newest_id = list(active_transactions.keys())[-1]
-                    current_tx = active_transactions[newest_id]
+                current_tx = match_transaction(active_transactions, payload, seen_correlation_ids)
             
             if current_tx:
                 # Find step matching this event

@@ -73,13 +73,16 @@ NATS `max_payload` limit.
 
 #### `io.discord.voice.frame`
 
-A chunk of raw PCM audio from one speaker in a voice channel. `io_discord` publishes it continuously
-after a successful `/voice join`, and until the bot leaves the channel.
+A chunk of raw PCM audio from one speaker in a voice channel. After a successful `/voice join`,
+`io_discord` publishes it for each member, from the first packet of that member until that member
+leaves the channel. During a silence, the frames hold zeros (`SilenceGeneratorSink`).
 
 Only `io_oreilles` with the `--discord` flag subscribes to this topic. The flag also stops the local
 microphone capture for that run. The service runs an independent VAD pipeline for each `speaker_id`.
 Thus a person who stops to speak does not cut the sentence of a different person. At the end of a
 speech segment, the service transcribes it and publishes `io.user.speak` with the `speaker` field.
+When no frame comes from a speaker for 1 s, the service decides that the speaker left. It closes the
+open turn of that speaker, publishes it, and removes the pipeline.
 
 - **Payload (JSON):**
   ```json
@@ -127,6 +130,19 @@ The inference order. The cortex sends it to the lobe_frontal.
   ```
 - For raw audio, `prompt` contains `"<name> said (voice):"`, or an empty string if the speaker is
   unknown. The hippocampe uses this empty prompt to skip the RAG search.
+- **The queue of the lobe_frontal ("the last message wins").** The lobe_frontal answers one message
+  at a time. It is busy from the start of a turn until Aletheia stops speaking
+  (`io.voice.speak.end` with `is_last: true`). The messages that arrive while it is busy wait.
+  When it is free, it takes all the waiting messages:
+  - It answers the last user message only.
+  - It writes the other user messages to the history (`hippocampe.history.add`, acknowledged), with
+    no answer.
+  - A proactive prompt (`source` present) gives its place to any user message. A proactive prompt
+    that waited is dropped, because a turn ran during the wait.
+  - It builds the context of the answered message again (see `hippocampe.context.build`), because
+    the context from its arrival time does not hold the last answer and the skipped messages.
+  Two guards release the queue: 1 s after the last fragment if no `io.voice.speak.start` came (no
+  TTS runs), and 60 s after it in all cases.
 
 #### `hippocampe.context.build`
 
@@ -143,6 +159,8 @@ the Qdrant RAG search in parallel.
   ```
 - The RAG search runs only if `prompt` is not empty. Thus a voice message that carries audio only
   does not pay the cost of an embedding search.
+- The cortex publishes it for each message. The lobe_frontal publishes it again, with the same
+  `correlation_id`, for a message that waited in its queue.
 
 #### `hippocampe.context.ready`
 
@@ -169,9 +187,12 @@ The stream of text fragments from the lobe_frontal. The fragments make real-time
   {
     "sequence": 1,
     "text": "Hello ",
-    "is_last": false
+    "is_last": false,
+    "correlation_id": "uuid-v4"
   }
   ```
+- `correlation_id` is the one of the `cortex.prompt` that the fragment answers. `io_voix` copies it
+  to `io.voice.speak.*`. The benchmark uses it to separate two requests that overlap.
 - The fragment with `sequence` 0 gives the time to first token.
 - The last fragment has `is_last` set to `true`. Its `text` can be empty, for example after a
   `stay_silent` tool call.
@@ -182,7 +203,11 @@ The stream of text fragments from the lobe_frontal. The fragments make real-time
 
 #### `hippocampe.history.add`
 
-Add one message to the PostgreSQL history. Fire-and-forget.
+Add one message to the PostgreSQL history. Fire-and-forget, or request-reply: when the message has
+a reply subject, the hippocampe answers an empty message after the write. The lobe_frontal uses the
+reply for the skipped messages of its queue and for the final answer of a turn, because it reads
+the history again a few milliseconds later. The hippocampe does the writes in the order of arrival,
+thus the reply also confirms the earlier writes of the same publisher.
 
 - **Payload (JSON):**
   ```json
@@ -387,15 +412,20 @@ in progress. The suspension stops at the first of these events:
 
 #### `io.voice.speak.start`
 
-`io_voix` publishes this message immediately before it plays or publishes the audio of a synthesized
-fragment. It gives a time reference. It contains no audio.
+The speaker starts to play a fragment. **The process that plays the sound publishes it**: `io_voix`
+when it plays on the local sound card, `io_discord` when it plays in the Discord voice channel. With
+`MUTE_LOCAL_PLAYBACK`, `io_voix` plays nothing and does not publish it. It contains no audio.
+
+If `io_discord` cannot play a fragment (no voice connection, or no audio), it publishes
+`io.voice.speak.start` and `io.voice.speak.end` at once. Thus the end of an answer is never lost.
 
 - **Payload (JSON):**
   ```json
   {
     "sequence": 1,
     "text": "Hello ",
-    "is_last": false
+    "is_last": false,
+    "correlation_id": "uuid-v4"
   }
   ```
 
@@ -410,32 +440,37 @@ publishes **one message for each fragment**, not one for each chunk. Thus this t
 meaning. The audio is 44.1 kHz since the change to the Audio8 engine. Consumers read the rate in the
 WAV header. They must not assume a rate.
 
-There is no message for a fragment that has no text, for example the silent fragment at the end of a
-stream.
+A fragment with no text gives a message only if it is the last fragment (`is_last: true`). Then
+`audio` is an empty string. This message tells the player that the answer ended. A synthesis that
+fails on the last fragment gives the same empty message.
 
 The `voice` cog of `io_discord` subscribes to this topic. It plays each fragment in the voice channel
-that the bot joined. If the bot is in no channel, it ignores the message.
+that the bot joined, and it publishes `io.voice.speak.start` and `.end` around the playback.
 
 - **Payload (JSON):**
   ```json
   {
     "sequence": 1,
-    "audio": "base64... (WAV, mono, 44100 Hz)",
+    "audio": "base64... (WAV, mono, 44100 Hz), or an empty string",
     "format": "wav",
-    "is_last": false
+    "is_last": false,
+    "text": "Hello ",
+    "correlation_id": "uuid-v4"
   }
   ```
 
 #### `io.voice.speak.end`
 
-`io_voix` publishes this message immediately after it plays or publishes the audio of a synthesized
-fragment. It gives a time reference. It contains no audio.
+The speaker stopped playing a fragment. The process that plays the sound publishes it, as for
+`io.voice.speak.start`. With `is_last: true`, Aletheia stopped speaking: the lobe_frontal then
+opens its queue, and `io_yeux` ends its pause. It contains no audio.
 
 - **Payload (JSON):**
   ```json
   {
     "sequence": 1,
-    "is_last": false
+    "is_last": false,
+    "correlation_id": "uuid-v4"
   }
   ```
 
@@ -496,13 +531,13 @@ restart of the cortex clears them.
 | Service | Subscribes to | Publishes on |
 |---|---|---|
 | cortex | `io.user.msg.text`, `io.user.speak`, `io.user.speak.raw`, `limbic.proactive.trigger`, `lobe.fragment_stream` | `cortex.prompt`, `hippocampe.context.build`, `cortex.interaction.started` |
-| lobe_frontal | `cortex.prompt`, `hippocampe.context.ready`, `limbic.mood.update`, `io.vision.state`, `lobe.topic.generate` (reply) | `lobe.fragment_stream`, `hippocampe.history.add`, `limbic.mood.set`, `hippocampe.rag.query` (request), `hippocampe.rag.add` (request) |
-| hippocampe | `hippocampe.context.build`, `hippocampe.history.add`, `hippocampe.rag.query`, `hippocampe.rag.add` | `hippocampe.context.ready` |
+| lobe_frontal | `cortex.prompt`, `hippocampe.context.ready`, `limbic.mood.update`, `io.vision.state`, `io.voice.speak.start`, `io.voice.speak.end`, `lobe.topic.generate` (reply) | `lobe.fragment_stream`, `hippocampe.history.add` (also request), `hippocampe.context.build` (a message that waited), `limbic.mood.set`, `hippocampe.rag.query` (request), `hippocampe.rag.add` (request) |
+| hippocampe | `hippocampe.context.build`, `hippocampe.history.add` (optional reply), `hippocampe.rag.query`, `hippocampe.rag.add` | `hippocampe.context.ready` |
 | limbic | `limbic.mood.set`, `cortex.interaction.started`, `io.presence.discord_voice` | `limbic.mood.update`, `limbic.proactive.trigger`, `lobe.topic.generate` (request) |
 | io_oreilles | `io.discord.voice.frame` (`--discord` only) | `io.user.speak`, `io.user.speak.raw` |
-| io_voix | `lobe.fragment_stream` | `io.voice.speak.start`, `io.voice.speak.audio`, `io.voice.speak.end` |
+| io_voix | `lobe.fragment_stream` | `io.voice.speak.audio`; `io.voice.speak.start`, `io.voice.speak.end` (local playback only) |
 | terminal | `lobe.fragment_stream` | `io.user.msg.text` |
-| io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame` |
+| io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`, `io.voice.speak.start`, `io.voice.speak.end` |
 | io_text | — | `io.user.msg.text` |
 | io_yeux | `cortex.interaction.started`, `io.voice.speak.start`, `io.voice.speak.end`, `lobe.fragment_stream` | `io.vision.state` |
 | benchmark | all topics of the loaded graph | — |

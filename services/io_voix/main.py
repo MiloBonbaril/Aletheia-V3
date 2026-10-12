@@ -49,10 +49,15 @@ def native_audio_player_worker(loop, nc, sample_rate):
             if item is None:
                 break
 
-            if nc and item.first:
+            # `.start` et `.end` disent « le haut-parleur joue » et « il s'est tu » : c'est le
+            # processus qui joue le son qui les publie. En mode muet, rien ne joue ici —
+            # io_discord les publie autour de sa propre lecture. Sinon le lobe_frontal, io_yeux
+            # et le benchmark croiraient Aletheia muette dès la fin de la synthèse.
+            if nc and item.first and stream is not None:
                 asyncio.run_coroutine_threadsafe(
                     nc.publish("io.voice.speak.start", json.dumps({
-                        "sequence": item.sequence, "text": item.text, "is_last": item.is_last
+                        "sequence": item.sequence, "text": item.text, "is_last": item.is_last,
+                        "correlation_id": item.correlation_id,
                     }).encode()), loop
                 )
 
@@ -60,10 +65,11 @@ def native_audio_player_worker(loop, nc, sample_rate):
             if stream is not None and item.samples.size:
                 stream.write(item.samples.reshape(-1, 1))
 
-            if nc and item.final:
+            if nc and item.final and stream is not None:
                 asyncio.run_coroutine_threadsafe(
                     nc.publish("io.voice.speak.end", json.dumps({
-                        "sequence": item.sequence, "is_last": item.is_last
+                        "sequence": item.sequence, "is_last": item.is_last,
+                        "correlation_id": item.correlation_id,
                     }).encode()), loop
                 )
             audio_sync_queue.task_done()
@@ -108,13 +114,14 @@ async def main():
     # create_task sans référence conservée).
     background_tasks: set[asyncio.Task] = set()
 
-    async def encode_and_publish_audio(samples, sequence, is_last):
+    async def encode_and_publish_audio(samples, sequence, text, is_last, correlation_id):
         try:
             audio_b64 = await loop.run_in_executor(
                 None, encode_wav_b64, samples, engine.sample_rate
             )
             await nc.publish("io.voice.speak.audio", json.dumps({
                 "sequence": sequence, "audio": audio_b64, "format": "wav", "is_last": is_last,
+                "text": text, "correlation_id": correlation_id,
             }).encode())
         except Exception as e:
             print(f"⚠️ Échec de publication audio : {e}")
@@ -125,10 +132,19 @@ async def main():
             text = data.get("text", "")
             sequence = data.get("sequence", 0)
             is_last = data.get("is_last", False)
+            correlation_id = data.get("correlation_id", "")
+
+            def publish_audio(samples):
+                task = asyncio.create_task(
+                    encode_and_publish_audio(samples, sequence, text, is_last, correlation_id)
+                )
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
 
             if not text.strip():
                 if is_last:
-                    audio_sync_queue.put(AudioChunk(EMPTY, sequence, "", True, True, True))
+                    audio_sync_queue.put(AudioChunk(EMPTY, sequence, "", True, True, True, correlation_id))
+                    publish_audio(EMPTY)
                 return
 
             def inference_job():
@@ -139,7 +155,7 @@ async def main():
                 try:
                     pieces = queue_fragment(
                         stream_fragment(engine, text), sequence, text, is_last,
-                        audio_sync_queue.put,
+                        audio_sync_queue.put, correlation_id,
                     )
                 except Exception as e:
                     print(f"⚠️ Échec d'inférence : {e}")
@@ -151,10 +167,10 @@ async def main():
             # Le fragment entier part en un seul WAV, comme avant : le contrat
             # `io.voice.speak.audio` reste « un message par fragment », donc io_discord
             # et io_visage ne changent pas.
-            if samples is not None and nc:
-                task = asyncio.create_task(encode_and_publish_audio(samples, sequence, is_last))
-                background_tasks.add(task)
-                task.add_done_callback(background_tasks.discard)
+            # Une synthèse ratée sur le dernier fragment publie quand même la fin de la réponse,
+            # vide : sans elle, io_discord ne dirait jamais qu'Aletheia s'est tue.
+            if samples is not None or is_last:
+                publish_audio(samples if samples is not None else EMPTY)
 
         except Exception as e:
             print(f"⚠️ Erreur Stream Handler: {e}")

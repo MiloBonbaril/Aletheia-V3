@@ -20,7 +20,9 @@ Nexus-V. It is written in **Python**, with `discord.py`.
   during the manual capture, then starts it again.
 - **Real-time voice playback:** it subscribes to `io.voice.speak.audio` and plays each synthesized
   fragment in the voice channel that it joined. It does not use the local loudspeaker of `io_voix`.
-  If the bot is in no channel, it ignores the audio.
+  If the bot is in no channel, it ignores the audio. It publishes `io.voice.speak.start` before
+  each fragment and `io.voice.speak.end` after it, also for a fragment that it cannot play. The
+  `lobe_frontal` waits for the `.end` of the last fragment before it answers the next message.
 - **Bets:** the `/bets` command group, for the bets between the members of the guild. This function
   is independent of the AI. It keeps its data in `data/bets.json`.
 
@@ -88,5 +90,6 @@ The tests cover the voice cog, the audio bridge and the presence cog.
 
 ## 🔌 NATS interface
 
-- **Publishes on:** `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`
+- **Publishes on:** `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`,
+  `io.voice.speak.start`, `io.voice.speak.end`
 - **Subscribes to:** `lobe.fragment_stream`, `io.voice.speak.audio`

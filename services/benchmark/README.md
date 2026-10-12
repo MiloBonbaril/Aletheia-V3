@@ -77,3 +77,25 @@ A graph file contains:
 
 A `filter` is a Python expression on the `payload` variable. Use it to select one message among many
 on the same topic, for example `payload.get('sequence') == 0`.
+
+## 🔗 How an event finds its flow
+
+An ingress event starts a new flow. It carries no `correlation_id`, because the cortex makes it.
+
+- The first event with a new `correlation_id` (normally `cortex.prompt`) goes to the oldest flow
+  that has no `correlation_id` yet. The cortex dispatches the messages in the order of arrival.
+- After that, an event with this `correlation_id` goes to this flow only. Thus two requests that
+  overlap (two Discord speakers, for example) do not mix.
+- An event with no `correlation_id` goes to the newest flow.
+- An event of a request that already finished goes to no flow.
+
+A message that the `lobe_frontal` skips in its queue gets no answer, thus its flow ends on the
+timeout of 15 s with a partial report.
+
+## 🧪 Tests
+
+```bash
+../../venv/bin/python -m pytest tests/
+```
+
+The tests cover the matching of an event to its flow (`match_transaction`).

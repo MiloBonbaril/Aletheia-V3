@@ -15,6 +15,7 @@ from voice import (
     decode_speak_audio,
     encode_voice_frame,
     format_recording_summary,
+    speak_events,
 )
 
 
@@ -96,7 +97,9 @@ class Voice(commands.Cog):
         self.logger.info("Voice cog initialized.")
 
         self.nc = None
-        self.speak_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        # (WAV ou None, payload) : un fragment sans audio n'entre que s'il clôt la réponse,
+        # pour que `io.voice.speak.end` parte quand même.
+        self.speak_queue: asyncio.Queue[tuple[bytes | None, dict]] = asyncio.Queue()
         self.bot.loop.create_task(self.setup_nats())
         self._playback_task = self.bot.loop.create_task(self._playback_loop())
 
@@ -110,20 +113,35 @@ class Voice(commands.Cog):
 
     async def _on_speak_audio(self, msg) -> None:
         try:
-            audio = decode_speak_audio(json.loads(msg.data.decode()))
-            if audio is not None:
-                await self.speak_queue.put(audio)
+            payload = json.loads(msg.data.decode())
+            audio = decode_speak_audio(payload)
+            if audio is not None or payload.get("is_last"):
+                await self.speak_queue.put((audio, payload))
         except Exception as e:
             self.logger.error(f"Failed to handle speak audio: {e}")
 
+    async def _publish_event(self, subject: str, event: dict) -> None:
+        if self.nc is None:
+            return
+        try:
+            await self.nc.publish(subject, json.dumps(event).encode())
+        except Exception as e:
+            self.logger.error(f"Failed to publish {subject}: {e}")
+
     async def _playback_loop(self) -> None:
         """Plays queued Aletheia audio into whatever channel is currently joined, one
-        fragment at a time — dropped silently if nothing's joined (e.g. still muted/left)."""
+        fragment at a time — dropped if nothing's joined (e.g. still muted/left).
+
+        Brackets each fragment with `io.voice.speak.start` / `.end`, even a dropped or empty
+        one: the lobe_frontal waits for the `.end` of the last fragment before it answers the
+        next message, so that event must never go missing."""
         while True:
-            audio = await self.speak_queue.get()
+            audio, payload = await self.speak_queue.get()
+            start, end = speak_events(payload)
+            await self._publish_event("io.voice.speak.start", start)
             guild = self.bot.get_guild(Config.GUILD_ID)
             vc = guild.voice_client if guild else None
-            if vc and vc.is_connected():
+            if audio is not None and vc and vc.is_connected():
                 try:
                     await self._play_and_wait(vc, audio)
                 except Exception as e:
@@ -131,6 +149,7 @@ class Voice(commands.Cog):
                     # vc.play() actually starting — don't let one dropped fragment kill
                     # playback for the rest of the process.
                     self.logger.error(f"Failed to play voice fragment: {e}")
+            await self._publish_event("io.voice.speak.end", end)
             self.speak_queue.task_done()
 
     async def _play_and_wait(self, vc: discord.VoiceClient, audio: bytes) -> None:

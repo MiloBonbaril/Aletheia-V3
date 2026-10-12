@@ -8,9 +8,14 @@ This service gives a voice to the VTuber. It is written in **Python**.
 - It synthesizes a continuous audio stream with **Audio8 TTS Preview 0.6B** (Apache-2.0, 44.1 kHz).
 - It sends the audio to the default output device, or to a virtual audio cable such as VB-Cable. It
   plays the fragments one after the other with no interruption.
-- It publishes the audio of each fragment on `io.voice.speak.audio`, and the time references on
-  `io.voice.speak.start` and `io.voice.speak.end`. Thus a different service, for example the Discord
-  bridge, can play the audio without the local loudspeaker.
+- It publishes the audio of each fragment on `io.voice.speak.audio`. Thus a different service, for
+  example the Discord bridge, can play the audio without the local loudspeaker. The last fragment of
+  an answer always gives a message, with an empty `audio` if it has no text: the player uses it to
+  know that the answer ended.
+- It publishes the time references `io.voice.speak.start` and `io.voice.speak.end` **only when it
+  plays the sound itself**. With `MUTE_LOCAL_PLAYBACK`, the player (`io_discord`) publishes them.
+  The `lobe_frontal` waits for `io.voice.speak.end` with `is_last` before it answers the next
+  message, thus this event must come at the true end of the speech.
 
 ## 🧠 Why the service streams each fragment in chunks
 
@@ -160,7 +165,7 @@ time. Float32 costs 250 MiB more and it is slower (122 ms against 71 ms for 200 
 | `A8_TEMPERATURE` | `0.7` | The sampling temperature. |
 | `A8_TOP_P` | `0.9` | The nucleus sampling threshold. |
 | `A8_TOP_K` | `50` | The top-k sampling threshold. |
-| `MUTE_LOCAL_PLAYBACK` | `false` | Set it to `1` or `true` to stop the local playback. The service opens no `sd.OutputStream`. The NATS publication continues. |
+| `MUTE_LOCAL_PLAYBACK` | `false` | Set it to `1` or `true` to stop the local playback. The service opens no `sd.OutputStream`. It publishes `io.voice.speak.audio`, but not `io.voice.speak.start` and `.end`: the process that plays the sound publishes them. |
 
 ## ⚠️ Limits
 
@@ -186,7 +191,8 @@ if the signal has a discontinuity at a joint.
 ## 🔌 NATS interface
 
 - **Subscribes to:** `lobe.fragment_stream`
-- **Publishes on:** `io.voice.speak.start`, `io.voice.speak.audio`, `io.voice.speak.end`
+- **Publishes on:** `io.voice.speak.audio`; `io.voice.speak.start` and `io.voice.speak.end` without
+  `MUTE_LOCAL_PLAYBACK` only. Each message carries the `correlation_id` of the fragment.
 
 The contract does not change. The service sends one WAV for each fragment, not one for each chunk.
 `io_discord` and `io_visage` need no modification: `FFmpegPCMAudio` finds the rate in the WAV header.

@@ -100,6 +100,10 @@ async def main():
         print(f"[Hippocampe] Ajout historique ({role})")
         if role and content:
             await add_message(role, content)
+        # Accusé optionnel : le lobe_frontal attend l'écriture avant de relire l'historique
+        # pour un message qui a patienté dans sa file. Sans `reply`, rien ne change.
+        if msg.reply:
+            await msg.respond(b"")
 
     # ── RAG : requête active (conservé pour get_from_memory du LLM) ──
 
