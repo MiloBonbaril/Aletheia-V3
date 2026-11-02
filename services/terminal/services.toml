@@ -131,6 +131,50 @@ cmd = [
   "--port", "8080",
 ]
 
+# The two entries below run together: Luth on 8080 for lobe_frontal, LFM3-VL on 8081 for
+# io_yeux_lfm. The sampling comes from the general.sampling keys of each GGUF file.
+
+[[service]]
+name = "llama-server-luth"
+group = "Cognition"
+kind = "process"
+cwd = "."
+depends_on = []
+ready_tcp = "127.0.0.1:8080"
+note = "Luth 2 2B Q6_K: the conversation and the tool calling. Start it with llama-server-lfm3-vl, not with another server on port 8080."
+cmd = [
+  "/home/milo/.local/bin/llama-server",
+  "-m", "/mnt/forge/ai/models/Luth/Luth-2-2B-Q6_K.gguf",
+  "-ngl", "all",
+  "-c", "32768",
+  "-fa", "on",
+  "-np", "1",
+  "--jinja",
+  "--host", "127.0.0.1",
+  "--port", "8080",
+]
+
+[[service]]
+name = "llama-server-lfm3-vl"
+group = "Cognition"
+kind = "process"
+cwd = "."
+depends_on = []
+ready_tcp = "127.0.0.1:8081"
+note = "LFM3-VL 2B QAD Q4_0 with the mmproj, on port 8081: the screen descriptions of io_yeux_lfm only."
+cmd = [
+  "/home/milo/.local/bin/llama-server",
+  "-m", "/mnt/forge/ai/models/Liquid/VL-2B/LFM3-VL-2B-QAD-Q4_0.gguf",
+  "--mmproj", "/mnt/forge/ai/models/Liquid/VL-2B/mmproj-LFM3-VL-2B-BF16.gguf",
+  "-ngl", "all",
+  "-c", "8192",
+  "-fa", "on",
+  "-np", "1",
+  "--jinja",
+  "--host", "127.0.0.1",
+  "--port", "8081",
+]
+
 [[service]]
 name = "cortex"
 group = "Cognition"
@@ -232,6 +276,18 @@ cwd = "services/io_yeux"
 cmd = ["{python}", "main.py"]
 depends_on = ["nats", "llama-server"]
 note = "Screen capture. In no profile: start it by hand, stop it to pause the capture."
+
+[[service]]
+name = "io_yeux_lfm"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "services/io_yeux"
+cmd = ["{python}", "main.py"]
+depends_on = ["nats", "llama-server-lfm3-vl"]
+note = "io_yeux on LFM3-VL, port 8081. In no profile. Do not start it with io_yeux."
+
+  [service.env]
+  IO_YEUX_LLAMA_URL = "http://127.0.0.1:8081/v1/chat/completions"
 
 [[service]]
 name = "io_text"

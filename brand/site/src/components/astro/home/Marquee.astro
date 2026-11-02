@@ -1,0 +1,72 @@
+---
+import symbolRaw from "../../../assets/brand/aletheia-symbol.svg?raw";
+import { inlineSvg } from "../../../lib/svg";
+import { TRAITS } from "../../../config";
+const items = [...TRAITS, ...TRAITS];
+const sym = inlineSvg(symbolRaw, "sym");
+---
+<div class="clip"><div class="marquee" aria-label={`Ses traits : ${TRAITS.join(", ")}`} role="img">
+  <div class="ruban" aria-hidden="true"></div>
+  <div class="track" aria-hidden="true">
+    {[0, 1].map(() => (
+      <div class="group">
+        {items.map((t) => (
+          <>
+            <span class="word">{t}</span>
+            <Fragment set:html={sym} />
+          </>
+        ))}
+      </div>
+    ))}
+  </div>
+</div></div>
+
+<style>
+  .clip {
+    overflow: clip;
+    padding-block: 1.5rem;
+  }
+  .marquee {
+    position: relative;
+    background: var(--ble);
+    color: var(--encre);
+    overflow: hidden;
+    rotate: -1.5deg;
+    margin-inline: -2rem;
+  }
+  .ruban {
+    height: 0.6rem;
+    background: var(--ruban);
+  }
+  .track {
+    display: flex;
+    width: max-content;
+    animation: marquee 38s linear infinite;
+  }
+  .marquee:hover .track {
+    animation-play-state: paused;
+  }
+  .group {
+    display: flex;
+    align-items: center;
+    gap: 2.25rem;
+    padding: 1.1rem 1.125rem 1.25rem;
+  }
+  .word {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: var(--step-3);
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .group :global(.sym) {
+    width: 2.6rem; /* ≥ 32 px : symbole standard */
+    height: auto;
+    flex: none;
+  }
+  @keyframes marquee {
+    to {
+      transform: translateX(-50%);
+    }
+  }
+</style>

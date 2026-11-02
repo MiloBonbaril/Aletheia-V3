@@ -1,0 +1,127 @@
+---
+/**
+ * Façade Twitch : aucun script ni cookie tiers avant le clic.
+ * Au clic, l'iframe officielle est créée (paramètre `parent` = domaine courant).
+ */
+import Icon from "./Icon.astro";
+import symbolRaw from "../../assets/brand/aletheia-symbol-reversed-e6a752.svg?raw";
+import { inlineSvg } from "../../lib/svg";
+interface Props {
+  channel: string;
+}
+const { channel } = Astro.props;
+---
+<div class="player" data-twitch={channel}>
+  <div class="poster" aria-hidden="true">
+    <Fragment set:html={inlineSvg(symbolRaw, "sym")} />
+    <div class="scan"></div>
+  </div>
+  <button class="load" type="button">
+    <span class="play"><Icon name="play" size={28} /></span>
+    <span class="txt">
+      <b>Lancer le lecteur Twitch</b>
+      <small>Le lecteur est chargé depuis twitch.tv au clic.</small>
+    </span>
+  </button>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-twitch]").forEach((el) => {
+    el.querySelector("button")?.addEventListener(
+      "click",
+      () => {
+        const iframe = document.createElement("iframe");
+        const params = new URLSearchParams({ channel: el.dataset.twitch!, parent: location.hostname, muted: "false" });
+        iframe.src = `https://player.twitch.tv/?${params}`;
+        iframe.title = "Lecteur Twitch";
+        iframe.allow = "autoplay; fullscreen";
+        iframe.allowFullscreen = true;
+        el.replaceChildren(iframe);
+        el.classList.add("is-loaded");
+      },
+      { once: true },
+    );
+  });
+</script>
+
+<style>
+  .player {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--radius-l);
+    background: var(--encre);
+    color: var(--papier);
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .player :global(iframe) {
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+  .poster {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    z-index: -1;
+  }
+  .poster :global(.sym) {
+    width: 42%;
+    height: auto;
+    opacity: 0.14;
+  }
+  .scan {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in oklab, var(--papier) 4%, transparent) 3px 4px);
+  }
+  .load {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .play {
+    display: grid;
+    place-items: center;
+    width: 4.5rem;
+    height: 4.5rem;
+    border-radius: 50%;
+    background: var(--ble);
+    color: var(--encre);
+    transition: transform 0.45s var(--ease-spring);
+  }
+  .load:hover .play {
+    transform: scale(1.1);
+  }
+  .txt {
+    display: grid;
+    gap: 0.15rem;
+  }
+  .txt b {
+    font-family: var(--font-display);
+    font-size: var(--step-1);
+    font-weight: 600;
+  }
+  .txt small {
+    font-size: 0.85rem;
+    color: color-mix(in oklab, var(--papier) 75%, var(--encre));
+  }
+  @media (max-width: 520px) {
+    .load {
+      flex-direction: column;
+      text-align: center;
+    }
+    .txt small {
+      display: none;
+    }
+  }
+</style>

@@ -57,11 +57,11 @@ def test_the_two_io_voix_entries_differ_only_by_the_local_playback():
 
 def test_no_profile_starts_two_services_that_share_a_device():
     """io_voix and io_voix_muet share the speaker; the io_oreilles pair shares the audio input;
-    the llama-server entries share port 8080."""
+    the llama-server entries share port 8080 (llama-server-lfm3-vl is on 8081)."""
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
     for name, members in manifest.profiles.items():
         for group in ({"io_voix", "io_voix_muet"}, {"io_oreilles", "io_oreilles_discord"},
-                      {"llama-server", "llama-server-qwen", "llama-server-bonsai"}):
+                      {"llama-server", "llama-server-qwen", "llama-server-bonsai", "llama-server-luth"}):
             assert len(group & set(members)) <= 1, f"le profil {name} lance {group} ensemble"
 
 
@@ -75,9 +75,9 @@ def test_every_profile_names_known_services():
 def test_io_yeux_is_in_no_profile():
     """The screen capture stays a deliberate act: see docs/adr/0006."""
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
-    assert "io_yeux" in {e.name for e in manifest.entries}
+    assert {"io_yeux", "io_yeux_lfm"} <= {e.name for e in manifest.entries}
     for name, members in manifest.profiles.items():
-        assert "io_yeux" not in members, f"le profil {name} lance io_yeux"
+        assert not {"io_yeux", "io_yeux_lfm"} & set(members), f"le profil {name} lance io_yeux"
 
 
 def test_manifest_rejects_a_duplicate_name(tmp_path):

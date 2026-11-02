@@ -1,0 +1,7 @@
+[
+  { "id": "lun-causerie", "weekday": 1, "start": "20:30", "durationMin": 120, "title": "Causerie du lundi", "kind": "stream", "platform": "twitch" },
+  { "id": "mer-jeu", "weekday": 3, "start": "21:00", "durationMin": 150, "title": "Elle découvre un jeu", "kind": "stream", "platform": "twitch" },
+  { "id": "ven-paddock", "weekday": 5, "start": "19:00", "durationMin": 60, "title": "Questions du Paddock", "kind": "discord", "platform": "discord" },
+  { "id": "sam-special", "weekday": 6, "start": "16:00", "durationMin": 180, "title": "Grand atelier du samedi", "kind": "special", "platform": "twitch" },
+  { "id": "dim-replay", "weekday": 7, "start": "18:00", "durationMin": 45, "title": "Le récap de la semaine", "kind": "stream", "platform": "youtube" }
+]

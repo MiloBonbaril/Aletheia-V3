@@ -1,0 +1,135 @@
+---
+import Icon from "./Icon.astro";
+import stackedRaw from "../../assets/brand/aletheia-stacked-reversed.svg?raw";
+import { inlineSvg } from "../../lib/svg";
+import { LINKS, NAV, SITE, TRAITS } from "../../config";
+const year = new Date().getFullYear();
+---
+<footer class="site-footer">
+  <div class="ruban" aria-hidden="true"></div>
+  <div class="wrap grid">
+    <div class="id">
+      <Fragment set:html={inlineSvg(stackedRaw, "stacked")} />
+      <p class="sr-only">{SITE.name}</p>
+      <p class="tag">{SITE.tagline}</p>
+    </div>
+
+    <nav aria-label="Pied de page">
+      <p class="title">Explorer</p>
+      <ul>
+        <li><a href="/">Accueil</a></li>
+        {NAV.map((n) => <li><a href={n.href}>{n.label}</a></li>)}
+      </ul>
+    </nav>
+
+    <div>
+      <p class="title">La retrouver</p>
+      <ul class="social">
+        <li><a href={LINKS.twitch} rel="noopener"><Icon name="twitch" size={20} /> Twitch</a></li>
+        <li><a href={LINKS.youtube} rel="noopener"><Icon name="youtube" size={20} /> YouTube</a></li>
+        <li><a href={LINKS.discord} rel="noopener"><Icon name="discord" size={20} /> Discord</a></li>
+      </ul>
+    </div>
+
+    <p class="traits" aria-hidden="true">
+      {TRAITS.map((t) => <span>{t}</span>)}
+    </p>
+  </div>
+  <div class="wrap legal">
+    <p>© {year} {SITE.name}. Personnage et identité visuelle — tous droits réservés.</p>
+    <p>Aletheia est une intelligence artificielle. Elle le dit, toujours.</p>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    position: relative;
+    background: var(--encre);
+    color: var(--papier);
+    padding-bottom: 2rem;
+  }
+  .ruban {
+    height: 0.9rem;
+    background: var(--ruban);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr 1fr;
+    gap: 3rem 2rem;
+    padding-block: clamp(3.5rem, 2rem + 6vw, 6rem) 3rem;
+  }
+  .id {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+  }
+  .id :global(.stacked) {
+    width: 9.5rem;
+    height: auto;
+  }
+  .tag {
+    color: color-mix(in oklab, var(--papier) 78%, var(--encre));
+  }
+  .title {
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ble);
+    margin-bottom: 1rem;
+  }
+  ul {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    gap: 0.5rem;
+  }
+  a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    text-decoration: none;
+    font-weight: 500;
+    background: linear-gradient(var(--ble), var(--ble)) 0 100% / 0 2px no-repeat;
+    transition: background-size 0.35s var(--ease-out);
+  }
+  a:hover {
+    background-size: 100% 2px;
+  }
+  .traits {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 1.2rem;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(2rem, 1rem + 5vw, 5.5rem);
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    color: color-mix(in oklab, var(--papier) 14%, var(--encre));
+  }
+  .traits span {
+    transition: color 0.4s;
+  }
+  .traits span:hover {
+    color: var(--ble);
+  }
+  .legal {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.5rem 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid color-mix(in oklab, var(--papier) 16%, var(--encre));
+    font-size: 0.85rem;
+    color: color-mix(in oklab, var(--papier) 72%, var(--encre));
+  }
+  @media (max-width: 760px) {
+    .grid {
+      grid-template-columns: 1fr 1fr;
+    }
+    .id {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

@@ -1,0 +1,265 @@
+---
+import LiveStatus from "../svelte/LiveStatus.svelte";
+import Icon from "./Icon.astro";
+import logoRaw from "../../assets/brand/aletheia-horizontal.svg?raw";
+import { inlineSvg } from "../../lib/svg";
+import { NAV, LINKS, SITE } from "../../config";
+import { getSlots } from "../../lib/content";
+
+const slots = await getSlots();
+const path = Astro.url.pathname.replace(/\/$/, "") || "/";
+const isCurrent = (href: string) => !href.includes("#") && (href === path || (href !== "/" && path.startsWith(href)));
+const apiBase = import.meta.env.PUBLIC_API_BASE ?? "";
+---
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="brand" href="/" aria-label={`${SITE.name} — accueil`}>
+      <Fragment set:html={inlineSvg(logoRaw, "logo")} />
+    </a>
+
+    <nav class="nav" aria-label="Navigation principale">
+      <ul>
+        {NAV.map((item) => (
+          <li><a href={item.href} aria-current={isCurrent(item.href) ? "page" : undefined}>{item.label}</a></li>
+        ))}
+      </ul>
+    </nav>
+
+    <div class="actions">
+      <LiveStatus client:idle slots={slots} timeZone={SITE.timezone} href={LINKS.twitch} apiBase={apiBase} />
+      <a class="btn btn--accent discord" href={LINKS.discord} rel="noopener">
+        <Icon name="discord" size={18} /> <span>Discord</span>
+      </a>
+      <button class="menu-btn" popovertarget="menu" aria-label="Ouvrir le menu">
+        <Icon name="menu" />
+      </button>
+    </div>
+  </div>
+
+  <nav id="menu" popover class="sheet" aria-label="Menu">
+    <button class="sheet-close" popovertarget="menu" popovertargetaction="hide" aria-label="Fermer le menu">
+      <Icon name="close" />
+    </button>
+    <ul>
+      {NAV.map((item, i) => (
+        <li style={`--i:${i}`}><a href={item.href}>{item.label}</a></li>
+      ))}
+      <li style="--i:4"><a href={LINKS.discord} rel="noopener">Discord</a></li>
+    </ul>
+    <div class="sheet-ruban" aria-hidden="true"></div>
+  </nav>
+</header>
+
+<script>
+  // Ferme le menu mobile après navigation vers une ancre.
+  document.querySelectorAll<HTMLAnchorElement>("#menu a").forEach((a) =>
+    a.addEventListener("click", () => document.getElementById("menu")?.hidePopover?.()),
+  );
+</script>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    view-transition-name: site-header;
+    background: color-mix(in oklab, var(--papier) 0%, transparent);
+    border-bottom: 1px solid transparent;
+  }
+  @supports (animation-timeline: scroll()) {
+    .site-header {
+      animation: header-solid linear both;
+      animation-timeline: scroll();
+      animation-range: 0 120px;
+    }
+  }
+  @supports not (animation-timeline: scroll()) {
+    .site-header {
+      background: color-mix(in oklab, var(--papier) 88%, transparent);
+      backdrop-filter: blur(14px);
+    }
+  }
+  @keyframes header-solid {
+    to {
+      background: color-mix(in oklab, var(--papier) 86%, transparent);
+      border-bottom-color: var(--line);
+      backdrop-filter: blur(14px) saturate(1.2);
+    }
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    min-height: 4.75rem;
+  }
+  .brand {
+    flex: none;
+    display: block;
+    padding-block: 0.5rem;
+    transition: transform 0.4s var(--ease-spring);
+  }
+  .brand:hover {
+    transform: rotate(-2deg) scale(1.03);
+  }
+  .brand :global(.logo) {
+    width: 168px; /* minimum écran : 160 px */
+    height: auto;
+  }
+  .nav {
+    margin-inline: auto;
+  }
+  .nav ul {
+    display: flex;
+    gap: 0.25rem;
+    list-style: none;
+    padding: 0;
+  }
+  .nav a {
+    position: relative;
+    display: block;
+    padding: 0.5rem 0.9rem;
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 1.02rem;
+    text-decoration: none;
+    border-radius: 99px;
+    transition: background-color 0.25s;
+  }
+  .nav a::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 0.15rem;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: var(--casaque);
+    transform: translateX(-50%) scale(0);
+    transition: transform 0.35s var(--ease-spring);
+  }
+  .nav a:hover {
+    background: var(--ble-voile);
+  }
+  .nav a[aria-current="page"]::after,
+  .nav a:hover::after {
+    transform: translateX(-50%) scale(1);
+  }
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .discord {
+    min-height: 2.5rem;
+    padding: 0.45rem 1rem;
+    font-size: 0.95rem;
+  }
+  .menu-btn {
+    display: none;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 50%;
+    border: 1.5px solid var(--encre);
+    background: var(--papier);
+    cursor: pointer;
+  }
+
+  /* Menu mobile (Popover API, sans JS) */
+  .sheet {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 6rem var(--gutter) 2rem;
+    border: 0;
+    background: var(--ble);
+    color: var(--encre);
+    overflow: hidden;
+  }
+  .sheet:popover-open {
+    display: flex;
+    flex-direction: column;
+    animation: sheet-in 0.5s var(--ease-out);
+  }
+  .sheet::backdrop {
+    background: transparent;
+  }
+  @keyframes sheet-in {
+    from {
+      clip-path: circle(0% at calc(100% - 2.5rem) 2.4rem);
+    }
+    to {
+      clip-path: circle(150% at calc(100% - 2.5rem) 2.4rem);
+    }
+  }
+  .sheet ul {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    gap: 0.25rem;
+  }
+  .sheet li {
+    animation: item-in 0.6s calc(0.12s + var(--i) * 0.05s) var(--ease-out) both;
+  }
+  @keyframes item-in {
+    from {
+      opacity: 0;
+      transform: translateY(1.5rem);
+    }
+  }
+  .sheet a {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(2.2rem, 10vw, 3.5rem);
+    letter-spacing: -0.02em;
+    text-decoration: none;
+    line-height: 1.15;
+  }
+  .sheet-close {
+    position: absolute;
+    top: 1rem;
+    right: var(--gutter);
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 50%;
+    border: 1.5px solid var(--encre);
+    background: transparent;
+    cursor: pointer;
+  }
+  .sheet-ruban {
+    margin-top: auto;
+    height: 1.25rem;
+    border-radius: 99px;
+    background: var(--ruban);
+  }
+
+  @media (max-width: 960px) {
+    .nav,
+    .discord {
+      display: none;
+    }
+    .actions {
+      margin-left: auto;
+    }
+    .menu-btn {
+      display: grid;
+    }
+  }
+  @media (max-width: 420px) {
+    .bar {
+      gap: 0.75rem;
+    }
+    .brand :global(.logo) {
+      width: 160px;
+    }
+    .actions :global(.live .label) {
+      font-size: 0.8rem;
+    }
+  }
+</style>

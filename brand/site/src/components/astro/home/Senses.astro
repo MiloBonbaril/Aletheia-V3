@@ -1,0 +1,146 @@
+---
+import Icon from "../Icon.astro";
+const cards = [
+  { n: "01", icon: "ear", title: "Elle écoute", text: "Le chat, la voix des invités, les silences aussi. Elle répond à ce qu'on lui dit vraiment, pas à un mot-clé.", tone: "ble", area: "a" },
+  { n: "02", icon: "eye", title: "Elle voit", text: "Elle regarde l'écran avec toi : un jeu, un dessin, un mème douteux. Et elle a des avis.", tone: "papier", area: "b" },
+  { n: "03", icon: "memory", title: "Elle se souvient", text: "Les pseudos, les running gags, la promesse de la semaine dernière. Personne n'est un inconnu deux fois.", tone: "casaque", area: "c" },
+  { n: "04", icon: "voice", title: "Elle répond", text: "En direct, avec sa voix et ses blagues. Quand elle se trompe, elle le dit — c'est un peu son truc.", tone: "encre", area: "d" },
+] as const;
+---
+<section class="section senses" aria-labelledby="senses-title">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">Ses quatre sens</p>
+      <h2 id="senses-title">Une IA qui fait attention à toi.</h2>
+      <p>Ses oreilles et ses lunettes ne sont pas qu'un style : ce sont ses deux premiers sens. Les deux suivants, elle les a appris avec sa communauté.</p>
+    </header>
+
+    <ul class="bento reveal-stagger">
+      {cards.map((c) => (
+        <li class={`card tone-${c.tone}`} style={`grid-area:${c.area}`}>
+          <span class="n">{c.n}</span>
+          <span class="icon"><Icon name={c.icon} size={34} /></span>
+          <h3>{c.title}</h3>
+          <p>{c.text}</p>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  .bento {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-areas:
+      "a a b"
+      "c d d";
+    gap: clamp(0.75rem, 0.5rem + 1vw, 1.25rem);
+  }
+  .card {
+    --card-bg: var(--papier);
+    --card-fg: var(--encre);
+    --card-sub: var(--encre-doux);
+    position: relative;
+    display: grid;
+    align-content: end;
+    gap: 0.75rem;
+    min-height: clamp(16rem, 12rem + 10vw, 22rem);
+    padding: clamp(1.4rem, 1rem + 1.5vw, 2.25rem);
+    border-radius: var(--radius-l);
+    background: var(--card-bg);
+    color: var(--card-fg);
+    overflow: hidden;
+    isolation: isolate;
+    transition: transform 0.5s var(--ease-spring);
+  }
+  .card:hover {
+    transform: translateY(-6px) rotate(-0.4deg);
+  }
+  .tone-ble {
+    --card-bg: var(--ble);
+    --card-sub: color-mix(in oklab, var(--encre) 82%, var(--ble));
+  }
+  .tone-papier {
+    border: 1.5px solid var(--encre);
+  }
+  .tone-casaque {
+    --card-bg: var(--casaque);
+    --card-fg: var(--papier);
+    --card-sub: color-mix(in oklab, var(--papier) 84%, var(--casaque));
+  }
+  .tone-encre {
+    --card-bg: var(--encre);
+    --card-fg: var(--papier);
+    --card-sub: color-mix(in oklab, var(--papier) 80%, var(--encre));
+  }
+  .n {
+    position: absolute;
+    top: 1.25rem;
+    right: 1.5rem;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(4rem, 3rem + 5vw, 8rem);
+    line-height: 0.8;
+    letter-spacing: -0.05em;
+    color: transparent;
+    -webkit-text-stroke: 1.5px currentColor;
+    opacity: 0.35;
+    z-index: -1;
+    transition: opacity 0.4s, transform 0.6s var(--ease-out);
+  }
+  .card:hover .n {
+    opacity: 0.6;
+    transform: translateY(-4px);
+  }
+  .icon {
+    position: absolute;
+    top: clamp(1.4rem, 1rem + 1.5vw, 2.25rem);
+    left: clamp(1.4rem, 1rem + 1.5vw, 2.25rem);
+    display: grid;
+    place-items: center;
+    width: 3.75rem;
+    height: 3.75rem;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    transition: transform 0.5s var(--ease-spring);
+  }
+  .card:hover .icon {
+    transform: rotate(-12deg) scale(1.06);
+  }
+  h3 {
+    font-size: var(--step-3);
+  }
+  p {
+    color: var(--card-sub);
+    max-width: 34ch;
+  }
+  .tone-ble::after {
+    content: "";
+    position: absolute;
+    right: -3rem;
+    bottom: -3rem;
+    width: 14rem;
+    height: 14rem;
+    border-radius: 50%;
+    background: var(--ruban);
+    opacity: 0.9;
+    z-index: -1;
+    mask: radial-gradient(circle, transparent 54%, #000 55%);
+  }
+  @media (max-width: 860px) {
+    .tone-ble::after {
+      top: -4.5rem;
+      bottom: auto;
+      right: -4.5rem;
+      width: 10rem;
+      height: 10rem;
+    }
+    .bento {
+      grid-template-columns: 1fr;
+      grid-template-areas: "a" "b" "c" "d";
+    }
+  }
+</style>

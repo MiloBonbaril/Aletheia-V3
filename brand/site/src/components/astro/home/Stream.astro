@@ -1,0 +1,70 @@
+---
+import Schedule from "../../svelte/Schedule.svelte";
+import TwitchEmbed from "../TwitchEmbed.astro";
+import Icon from "../Icon.astro";
+import { LINKS, SITE } from "../../../config";
+import { getSlots } from "../../../lib/content";
+const slots = await getSlots();
+---
+<section id="stream" class="section stream" aria-labelledby="stream-title">
+  <div class="wrap">
+    <header class="section-head reveal">
+      <p class="eyebrow">Le stream</p>
+      <h2 id="stream-title">Plusieurs soirs par semaine, en direct.</h2>
+      <p>Des causeries, des jeux qu'elle découvre, des ateliers. Le chat décide souvent de la suite.</p>
+    </header>
+
+    <div class="layout">
+      <div class="reveal">
+        <TwitchEmbed channel={LINKS.twitchChannel} />
+        <p class="platforms">
+          <a class="link" href={LINKS.twitch} rel="noopener"><Icon name="twitch" size={18} /> Suivre sur Twitch</a>
+          <a class="link" href={LINKS.youtube} rel="noopener"><Icon name="youtube" size={18} /> Les rediffusions sur YouTube</a>
+        </p>
+      </div>
+      <aside class="reveal" aria-label="Prochain live">
+        <Schedule client:visible slots={slots} timeZone={SITE.timezone} links={LINKS} showWeek={false} />
+        <a class="btn btn--ghost all" href="/planning"><Icon name="calendar" size={18} /> Tout le planning</a>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<style>
+  .stream {
+    background: var(--ble-voile);
+    border-block: 1px solid var(--line);
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: clamp(1rem, 0.5rem + 2vw, 2rem);
+    align-items: start;
+  }
+  aside {
+    display: grid;
+    gap: 1rem;
+  }
+  aside :global(.next) {
+    min-height: 100%;
+  }
+  .all {
+    justify-self: start;
+  }
+  .platforms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.75rem;
+    margin-top: 1.25rem;
+  }
+  .platforms a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  @media (max-width: 960px) {
+    .layout {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

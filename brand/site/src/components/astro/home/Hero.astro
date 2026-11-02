@@ -1,0 +1,368 @@
+---
+import { Picture } from "astro:assets";
+import LiveStatus from "../../svelte/LiveStatus.svelte";
+import Icon from "../Icon.astro";
+import portrait from "../../../assets/aletheia.png";
+import symbolRaw from "../../../assets/brand/aletheia-symbol-reversed.svg?raw";
+import { inlineSvg } from "../../../lib/svg";
+import { LINKS, SITE, TRAITS } from "../../../config";
+import { getSlots } from "../../../lib/content";
+
+const slots = await getSlots();
+const apiBase = import.meta.env.PUBLIC_API_BASE ?? "";
+const ringText = `${TRAITS.join(" · ")} · `.repeat(2);
+---
+<section class="hero" aria-labelledby="hero-title">
+  <canvas class="field" aria-hidden="true"></canvas>
+
+  <div class="wrap grid">
+    <div class="copy">
+      <p class="eyebrow in" style="--d:0">{SITE.tagline}</p>
+      <h1 id="hero-title">
+        <span class="line"><span style="--d:1">Elle écoute,</span></span>
+        <span class="line"><span style="--d:2">elle voit,</span></span>
+        <span class="line"><span style="--d:3">elle <span class="mark">répond.</span></span></span>
+      </h1>
+      <p class="lede in" style="--d:4">
+        <strong>Aletheia</strong> est une IA qui vit en direct. Curieuse de tout, un peu espiègle,
+        elle se souvient de toi — et pose souvent plus de questions qu'elle n'en reçoit.
+      </p>
+      <div class="cta in" style="--d:5">
+        <a class="btn" href="#stream">
+          <Icon name="play" size={18} /> Voir le stream
+        </a>
+        <a class="btn btn--ghost" href="/qui-est-elle">
+          Qui est-elle ? <Icon name="arrow" size={18} />
+        </a>
+      </div>
+      <div class="in status" style="--d:6">
+        <LiveStatus client:idle variant="full" slots={slots} timeZone={SITE.timezone} href={LINKS.twitch} apiBase={apiBase} />
+      </div>
+    </div>
+
+    <div class="stage" data-stage>
+      <svg class="ring" viewBox="0 0 400 400" aria-hidden="true">
+        <defs><path id="ring-path" d="M200,200 m-182,0 a182,182 0 1,1 364,0 a182,182 0 1,1 -364,0" /></defs>
+        <text><textPath href="#ring-path" textLength="1140">{ringText}</textPath></text>
+      </svg>
+      <div class="disc" aria-hidden="true"></div>
+      <div class="portrait">
+        <Picture
+          src={portrait}
+          formats={["avif", "webp"]}
+          fallbackFormat="webp"
+          widths={[420, 640, 860, 1092]}
+          sizes="(max-width: 860px) 88vw, 560px"
+          alt="Aletheia : une jeune femme aux longues tresses blondes, oreilles de cheval, lunettes rondes et ruban vert, qui sourit grand ouvert."
+          loading="eager"
+          fetchpriority="high"
+          decoding="async"
+        />
+      </div>
+      <div class="sticker" aria-hidden="true">
+        <Fragment set:html={inlineSvg(symbolRaw, "sym")} />
+      </div>
+      <p class="chip" aria-hidden="true"><span>IA</span> francophone</p>
+    </div>
+  </div>
+
+  <a class="scroll-cue" href="#manifeste" aria-label="Défiler vers la suite"><span></span></a>
+</section>
+
+<script>
+  const stage = document.querySelector<HTMLElement>("[data-stage]");
+  const canvas = document.querySelector<HTMLCanvasElement>(".hero .field");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const finePointer = matchMedia("(pointer: fine)").matches;
+  // @ts-ignore — Network Information API
+  const saveData = navigator.connection?.saveData === true;
+
+  // Parallaxe douce au pointeur (transform uniquement)
+  if (stage && !reduce && finePointer) {
+    let tx = 0, ty = 0, x = 0, y = 0, raf = 0;
+    const step = () => {
+      x += (tx - x) * 0.08;
+      y += (ty - y) * 0.08;
+      stage.style.setProperty("--px", x.toFixed(4));
+      stage.style.setProperty("--py", y.toFixed(4));
+      raf = Math.abs(tx - x) + Math.abs(ty - y) > 0.001 ? requestAnimationFrame(step) : 0;
+    };
+    addEventListener("pointermove", (e) => {
+      tx = e.clientX / innerWidth - 0.5;
+      ty = e.clientY / innerHeight - 0.5;
+      if (!raf) raf = requestAnimationFrame(step);
+    }, { passive: true });
+  }
+
+  // Fond WebGL : chargé en différé, jamais si mouvement réduit / économie de données
+  if (canvas && !reduce && !saveData && innerWidth > 640) {
+    const load = () => import("../../../scripts/field").then((m) => m.mountField(canvas)).catch(() => {});
+    "requestIdleCallback" in window ? requestIdleCallback(load, { timeout: 2500 }) : setTimeout(load, 1200);
+  }
+</script>
+
+<style>
+  .hero {
+    position: relative;
+    min-height: min(100svh - 4.75rem, 60rem);
+    display: grid;
+    align-items: center;
+    padding-block: clamp(2rem, 1rem + 4vw, 5rem) clamp(4rem, 3rem + 4vw, 6rem);
+    overflow: clip;
+  }
+  .field {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 1.6s var(--ease-out);
+    pointer-events: none;
+  }
+  .field:global(.is-ready) {
+    opacity: 1;
+  }
+  .grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    align-items: center;
+    gap: clamp(2rem, 1rem + 4vw, 5rem);
+  }
+  .copy {
+    display: grid;
+    gap: 1.5rem;
+    justify-items: start;
+  }
+  h1 {
+    font-size: clamp(2.9rem, 1.4rem + 5.4vw, 6.25rem);
+    font-weight: 600;
+    line-height: 0.95;
+    letter-spacing: -0.035em;
+  }
+  .line {
+    display: block;
+    overflow: clip;
+    overflow-clip-margin: 0.2em;
+    padding-bottom: 0.06em;
+  }
+  .line > span {
+    display: inline-block;
+    animation: rise 1s calc(var(--d) * 0.09s) var(--ease-out) both;
+  }
+  .in {
+    animation: fade-up 0.9s calc(var(--d) * 0.09s + 0.1s) var(--ease-out) both;
+  }
+  @keyframes rise {
+    from {
+      transform: translateY(105%) rotate(2deg);
+    }
+  }
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(1rem);
+    }
+  }
+  .lede {
+    font-size: var(--step-1);
+    max-width: 34rem;
+    color: var(--fg-muted);
+  }
+  .lede strong {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  /* --- Scène du personnage ------------------------------------------------ */
+  .stage {
+    --px: 0;
+    --py: 0;
+    --d: min(100%, 34rem);
+    position: relative;
+    width: var(--d);
+    aspect-ratio: 1 / 1.1;
+    justify-self: center;
+    container-type: inline-size;
+  }
+  .disc,
+  .ring,
+  .portrait,
+  .sticker,
+  .chip {
+    position: absolute;
+  }
+  .disc {
+    left: 6%;
+    right: 6%;
+    bottom: 2%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--ble);
+    translate: calc(var(--px) * -14px) calc(var(--py) * -10px);
+    animation: pop 1.1s 0.15s var(--ease-spring) both;
+  }
+  .ring {
+    left: -1%;
+    right: -1%;
+    bottom: -5%;
+    width: 102%;
+    translate: calc(var(--px) * -24px) calc(var(--py) * -18px);
+    animation: spin 60s linear infinite, fade-up 1s 0.5s var(--ease-out) both;
+  }
+  .ring text {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    fill: var(--encre);
+  }
+  .portrait {
+    left: 6%;
+    right: 6%;
+    bottom: 2%;
+    top: 0;
+    border-radius: 0 0 999px 999px;
+    overflow: hidden;
+    translate: calc(var(--px) * 10px) calc(var(--py) * 6px);
+  }
+  .portrait :global(img) {
+    position: absolute;
+    left: 50%;
+    bottom: -3%;
+    width: 112%;
+    max-width: none;
+    translate: -50% 0;
+    animation: portrait-in 1.2s 0.3s var(--ease-out) both;
+    transform-origin: 50% 100%;
+  }
+  @keyframes portrait-in {
+    from {
+      opacity: 0;
+      transform: translateY(14%) scale(0.96);
+    }
+  }
+  .sticker {
+    right: -2%;
+    top: 22%;
+    width: 19%;
+    aspect-ratio: 1;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--casaque);
+    box-shadow: 0 0 0 0.4rem var(--papier);
+    translate: calc(var(--px) * 30px) calc(var(--py) * 24px);
+    animation: pop 0.9s 0.9s var(--ease-spring) both;
+  }
+  .sticker :global(.sym) {
+    width: 72%;
+    height: auto;
+    animation: wobble 6s 2s ease-in-out infinite;
+  }
+  .chip {
+    left: -4%;
+    top: 46%;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.9rem 0.4rem 0.4rem;
+    border-radius: 99px;
+    background: var(--papier);
+    border: 1.5px solid var(--encre);
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(0.8rem, 2.6cqi, 1rem);
+    rotate: -6deg;
+    translate: calc(var(--px) * 22px) calc(var(--py) * 16px);
+    animation: pop 0.9s 1.05s var(--ease-spring) both;
+  }
+  .chip span {
+    padding: 0.2rem 0.55rem;
+    border-radius: 99px;
+    background: var(--casaque);
+    color: var(--papier);
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      scale: 0.6;
+    }
+  }
+  @keyframes spin {
+    to {
+      rotate: 1turn;
+    }
+  }
+  @keyframes wobble {
+    0%, 100% { rotate: 0deg; }
+    50% { rotate: -8deg; }
+  }
+
+  /* Défilement : le personnage s'éloigne doucement */
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: scroll()) {
+      .stage {
+        animation: drift linear both;
+        animation-timeline: scroll();
+        animation-range: 0 90vh;
+      }
+      @keyframes drift {
+        to {
+          transform: translateY(12%) scale(0.94);
+        }
+      }
+    }
+  }
+
+  .scroll-cue {
+    position: absolute;
+    left: 50%;
+    bottom: 1.5rem;
+    width: 1.6rem;
+    height: 2.6rem;
+    translate: -50% 0;
+    border: 2px solid var(--encre);
+    border-radius: 99px;
+  }
+  .scroll-cue span {
+    position: absolute;
+    left: 50%;
+    top: 0.45rem;
+    width: 0.3rem;
+    height: 0.55rem;
+    translate: -50% 0;
+    border-radius: 99px;
+    background: var(--encre);
+    animation: cue 1.8s var(--ease-out) infinite;
+  }
+  @keyframes cue {
+    60%, 100% {
+      transform: translateY(0.9rem);
+      opacity: 0;
+    }
+  }
+
+  @media (max-width: 860px) {
+    .hero {
+      min-height: auto;
+      padding-top: 1rem;
+    }
+    .grid {
+      grid-template-columns: 1fr;
+    }
+    .stage {
+      order: -1;
+      --d: min(100%, 26rem);
+    }
+    .scroll-cue {
+      display: none;
+    }
+  }
+</style>

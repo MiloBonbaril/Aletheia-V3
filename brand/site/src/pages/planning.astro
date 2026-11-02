@@ -1,0 +1,54 @@
+---
+import Base from "../layouts/Base.astro";
+import Schedule from "../components/svelte/Schedule.svelte";
+import Icon from "../components/astro/Icon.astro";
+import { LINKS, SITE } from "../config";
+import { getSlots } from "../lib/content";
+const slots = await getSlots();
+---
+<Base title="Planning" description="Le planning des streams d'Aletheia, affiché dans ton fuseau horaire, avec un compte à rebours jusqu'au prochain live.">
+  <section class="head">
+    <div class="wrap">
+      <p class="eyebrow">Planning</p>
+      <h1>On se voit <span class="mark">quand ?</span></h1>
+      <p class="lede">Les horaires s'adaptent à ton fuseau. Ajoute le planning à ton agenda pour ne rien rater.</p>
+      <div class="cta">
+        <a class="btn" href="/planning.ics"><Icon name="calendar" size={18} /> Ajouter à mon agenda</a>
+        <a class="btn btn--ghost" href={LINKS.twitch} rel="noopener"><Icon name="twitch" size={18} /> Suivre sur Twitch</a>
+      </div>
+    </div>
+  </section>
+  <section class="section body">
+    <div class="wrap">
+      <Schedule client:load slots={slots} timeZone={SITE.timezone} links={LINKS} />
+    </div>
+  </section>
+</Base>
+
+<style>
+  .head {
+    padding-block: clamp(2rem, 1rem + 4vw, 5rem) 0;
+  }
+  .head .wrap {
+    display: grid;
+    gap: 1.5rem;
+  }
+  h1 {
+    font-size: var(--step-5);
+    line-height: 0.95;
+    letter-spacing: -0.035em;
+  }
+  .lede {
+    font-size: var(--step-1);
+    color: var(--fg-muted);
+    max-width: 36rem;
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .body {
+    padding-top: clamp(2.5rem, 2rem + 3vw, 4rem);
+  }
+</style>

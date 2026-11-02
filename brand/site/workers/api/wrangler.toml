@@ -1,0 +1,13 @@
+name = "aletheia-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+TWITCH_LOGIN = "aletheia_placeholder"
+ALLOWED_ORIGIN = "https://aletheia.example"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "REMPLACER_PAR_L_ID_KV"
+
+# Secrets : wrangler secret put TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET

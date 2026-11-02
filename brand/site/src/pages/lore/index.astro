@@ -1,0 +1,165 @@
+---
+import Base from "../../layouts/Base.astro";
+import Icon from "../../components/astro/Icon.astro";
+import { getLore } from "../../lib/content";
+const chapters = await getLore();
+---
+<Base title="Lore" description="L'histoire d'Aletheia, chapitre après chapitre : du premier son au Paddock.">
+  <section class="head">
+    <div class="wrap">
+      <p class="eyebrow">Le lore</p>
+      <h1>Du premier son <br />au <span class="mark">Paddock</span>.</h1>
+      <p class="lede">Son histoire s'écrit en direct. Voici ce qu'on sait déjà — le reste, elle le découvre avec vous.</p>
+    </div>
+  </section>
+
+  <section class="section timeline-section">
+    <ol class="wrap timeline">
+      {chapters.map((c, i) => (
+        <li class="item reveal" style={`--i:${i}`}>
+          <span class="node" aria-hidden="true"></span>
+          <a href={`/lore/${c.id}`} class="entry">
+            <span class="num" style={`view-transition-name: num-${c.id}`}>{String(c.data.chapter).padStart(2, "0")}</span>
+            <div class="body">
+              <p class="era">{c.data.era}</p>
+              <h2 style={`view-transition-name: title-${c.id}`}>{c.data.title}</h2>
+              <p class="sum">{c.data.summary}</p>
+              <span class="more">Lire le chapitre <Icon name="arrow" size={16} /></span>
+            </div>
+          </a>
+        </li>
+      ))}
+      <li class="item item--end">
+        <span class="node" aria-hidden="true"></span>
+        <p class="tbc">À suivre, en direct.</p>
+      </li>
+    </ol>
+  </section>
+</Base>
+
+<style>
+  .head {
+    padding-block: clamp(2rem, 1rem + 4vw, 5rem) 1rem;
+  }
+  .head .wrap {
+    display: grid;
+    gap: 1.5rem;
+  }
+  h1 {
+    font-size: var(--step-5);
+    line-height: 0.95;
+    letter-spacing: -0.035em;
+  }
+  .lede {
+    font-size: var(--step-1);
+    color: var(--fg-muted);
+    max-width: 36rem;
+  }
+  .timeline {
+    --rail: 2.5rem;
+    position: relative;
+    list-style: none;
+    padding-left: 0;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--rail) / 2 - 1px);
+    top: 1rem;
+    bottom: 1rem;
+    width: 2px;
+    background: repeating-linear-gradient(var(--encre) 0 8px, transparent 8px 14px);
+  }
+  .item {
+    position: relative;
+    padding-left: calc(var(--rail) + clamp(1rem, 0.5rem + 2vw, 2.5rem));
+    padding-bottom: clamp(2rem, 1rem + 3vw, 4rem);
+  }
+  /* Nœud en forme de verre de lunettes */
+  .node {
+    position: absolute;
+    left: 0;
+    top: 1.4rem;
+    width: var(--rail);
+    height: var(--rail);
+    border-radius: 50%;
+    border: 0.45rem solid var(--encre);
+    background: var(--ble);
+    transition: transform 0.5s var(--ease-spring);
+  }
+  .item:hover .node {
+    transform: scale(1.15);
+  }
+  .entry {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: clamp(1rem, 0.5rem + 3vw, 3rem);
+    padding: clamp(1.25rem, 1rem + 1.5vw, 2.25rem);
+    border-radius: var(--radius-l);
+    text-decoration: none;
+    border: 1.5px solid var(--line);
+    background: var(--papier);
+    transition: border-color 0.3s, transform 0.5s var(--ease-spring), background-color 0.3s;
+  }
+  .entry:hover {
+    border-color: var(--encre);
+    transform: translateX(6px);
+    background: var(--ble-voile);
+  }
+  .num {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(3.5rem, 2rem + 6vw, 7rem);
+    line-height: 0.85;
+    letter-spacing: -0.05em;
+  }
+  .body {
+    display: grid;
+    gap: 0.6rem;
+    align-content: start;
+  }
+  .era {
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--casaque);
+  }
+  h2 {
+    font-size: var(--step-3);
+  }
+  .sum {
+    color: var(--fg-muted);
+    max-width: 48ch;
+    font-size: var(--step-0);
+  }
+  .more {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+    color: var(--casaque);
+  }
+  .item--end .node {
+    background: var(--casaque);
+    border-color: var(--casaque);
+    box-shadow: inset 0 0 0 0.35rem var(--papier);
+  }
+  .tbc {
+    padding-top: 1.6rem;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: var(--step-2);
+  }
+  @media (max-width: 600px) {
+    .entry {
+      grid-template-columns: 1fr;
+    }
+    .timeline {
+      --rail: 1.75rem;
+    }
+    .node {
+      border-width: 0.35rem;
+    }
+  }
+</style>

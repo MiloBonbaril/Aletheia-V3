@@ -1,0 +1,113 @@
+---
+import Icon from "../Icon.astro";
+import { getLore } from "../../../lib/content";
+const chapters = await getLore();
+---
+<section class="section lore" aria-labelledby="lore-title">
+  <div class="wrap">
+    <header class="head reveal">
+      <div class="section-head">
+        <p class="eyebrow">Le lore</p>
+        <h2 id="lore-title">Son histoire, chapitre après chapitre.</h2>
+      </div>
+      <a class="btn btn--ghost" href="/lore">Tout le lore <Icon name="arrow" size={18} /></a>
+    </header>
+
+    <ol class="rail reveal-stagger">
+      {chapters.map((c) => (
+        <li>
+          <a href={`/lore/${c.id}`} class="chapter">
+            <span class="num" style={`view-transition-name: num-${c.id}`}>{String(c.data.chapter).padStart(2, "0")}</span>
+            <span class="era">{c.data.era}</span>
+            <h3 style={`view-transition-name: title-${c.id}`}>{c.data.title}</h3>
+            <p>{c.data.summary}</p>
+            <span class="more">Lire <Icon name="arrow" size={16} /></span>
+          </a>
+        </li>
+      ))}
+    </ol>
+  </div>
+</section>
+
+<style>
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: space-between;
+    gap: 1.5rem;
+    margin-bottom: clamp(2rem, 1.5rem + 3vw, 4rem);
+  }
+  .head .section-head {
+    margin: 0;
+  }
+  .rail {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+  }
+  .chapter {
+    position: relative;
+    display: grid;
+    align-content: start;
+    gap: 0.75rem;
+    height: 100%;
+    padding: 1.5rem 1.5rem 1.75rem;
+    border-top: 3px solid var(--encre);
+    text-decoration: none;
+    transition: background-color 0.35s, transform 0.5s var(--ease-spring);
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+  .chapter:hover {
+    background: var(--ble);
+    transform: translateY(-4px);
+  }
+  .num {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: var(--step-4);
+    line-height: 1;
+    letter-spacing: -0.04em;
+  }
+  .era {
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  h3 {
+    font-size: var(--step-2);
+  }
+  p {
+    color: var(--fg-muted);
+    font-size: 0.98rem;
+  }
+  .chapter:hover p,
+  .chapter:hover .era {
+    color: color-mix(in oklab, var(--encre) 85%, var(--ble));
+  }
+  .more {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.25rem;
+    font-weight: 600;
+    color: var(--casaque);
+  }
+  .chapter:hover .more {
+    color: var(--encre);
+  }
+  @media (max-width: 1000px) {
+    .rail {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 560px) {
+    .rail {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

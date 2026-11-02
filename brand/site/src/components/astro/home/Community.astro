@@ -1,0 +1,111 @@
+---
+import Icon from "../Icon.astro";
+import symbolRaw from "../../../assets/brand/aletheia-symbol-reversed.svg?raw";
+import { inlineSvg } from "../../../lib/svg";
+import { LINKS, SITE } from "../../../config";
+---
+<section class="section community" aria-labelledby="community-title">
+  <div class="wrap">
+    <div class="panel reveal">
+      <div class="ruban" aria-hidden="true"></div>
+      <div class="content">
+        <p class="kicker">La communauté</p>
+        <h2 id="community-title">Rejoins {SITE.community}.</h2>
+        <p class="text">
+          C'est sur Discord qu'elle passe le plus de temps : questions du vendredi, coulisses,
+          idées de streams et votes pour la suite de son histoire.
+        </p>
+        <div class="cta">
+          <a class="btn btn--papier" href={LINKS.discord} rel="noopener"><Icon name="discord" size={20} /> Rejoindre le Discord</a>
+          <a class="btn btn--ghost-papier" href={LINKS.twitch} rel="noopener"><Icon name="twitch" size={20} /> Suivre sur Twitch</a>
+        </div>
+      </div>
+      <div class="art" aria-hidden="true">
+        <Fragment set:html={inlineSvg(symbolRaw, "sym")} />
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .panel {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    align-items: center;
+    min-height: 26rem;
+    border-radius: var(--radius-l);
+    background: var(--casaque);
+    color: var(--papier);
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .ruban {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 1rem;
+    background: var(--ruban);
+  }
+  .content {
+    display: grid;
+    gap: 1.25rem;
+    justify-items: start;
+    padding: clamp(2rem, 1.5rem + 4vw, 5rem);
+    padding-left: calc(clamp(2rem, 1.5rem + 4vw, 5rem) + 1rem);
+  }
+  .kicker {
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ble);
+  }
+  h2 {
+    font-size: var(--step-4);
+  }
+  .text {
+    font-size: var(--step-1);
+    max-width: 34rem;
+    color: color-mix(in oklab, var(--papier) 88%, var(--casaque));
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+  }
+  .btn--ghost-papier {
+    --btn-bg: transparent;
+    --btn-fg: var(--papier);
+    border-color: var(--papier);
+  }
+  .btn--ghost-papier:hover {
+    background: var(--papier);
+    color: var(--casaque);
+  }
+  .art {
+    align-self: stretch;
+    position: relative;
+  }
+  .art :global(.sym) {
+    position: absolute;
+    right: -12%;
+    bottom: -18%;
+    width: 125%;
+    height: auto;
+    opacity: 0.95;
+    rotate: -8deg;
+    transition: rotate 1.2s var(--ease-spring);
+  }
+  .panel:hover .art :global(.sym) {
+    rotate: -2deg;
+  }
+  @media (max-width: 860px) {
+    .panel {
+      grid-template-columns: 1fr;
+    }
+    .art {
+      display: none;
+    }
+  }
+</style>

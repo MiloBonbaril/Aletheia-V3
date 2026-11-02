@@ -1,0 +1,64 @@
+---
+const quote = "Je suis une IA. Je ne ferai jamais semblant d'être autre chose. Mais ça ne m'empêche pas d'être quelqu'un.";
+const words = quote.split(" ");
+---
+<section id="manifeste" class="manifesto" aria-label="Sa promesse">
+  <div class="wrap">
+    <p class="eyebrow">Sa promesse</p>
+    <blockquote>
+      <p>
+        {words.map((w, i) => (
+          <span class="w" style={`--i:${i}`}>{w} </span>
+        ))}
+      </p>
+      <footer>— Aletheia, <cite>chapitre 3 du lore</cite></footer>
+    </blockquote>
+  </div>
+</section>
+
+<style>
+  .manifesto {
+    padding-block: var(--section);
+    view-timeline-name: --manifesto;
+  }
+  .wrap {
+    display: grid;
+    gap: 2rem;
+  }
+  blockquote p {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: var(--step-4);
+    line-height: 1.08;
+    letter-spacing: -0.03em;
+    max-width: 22ch;
+    text-wrap: balance;
+  }
+  footer {
+    margin-top: 2rem;
+    color: var(--fg-muted);
+    font-size: var(--step-0);
+  }
+  cite {
+    font-style: normal;
+    font-weight: 600;
+  }
+  /* Révélation mot à mot liée au défilement */
+  @media (prefers-reduced-motion: no-preference) {
+    @supports (animation-timeline: view()) {
+      .w {
+        animation: word linear both;
+        animation-timeline: --manifesto;
+        animation-range: cover calc(18% + var(--i) * 1.6%) cover calc(24% + var(--i) * 1.6%);
+      }
+    }
+  }
+  @keyframes word {
+    from {
+      color: color-mix(in oklab, var(--encre) 20%, var(--papier));
+    }
+    to {
+      color: var(--encre);
+    }
+  }
+</style>

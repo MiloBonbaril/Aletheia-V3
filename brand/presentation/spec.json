@@ -1,0 +1,40 @@
+{
+  "brand": "Aletheia",
+  "tagline": "VTubeuse IA francophone",
+  "brief": "Une VTubeuse IA autonome, francophone, qui écoute, voit, se souvient et répond en direct. Elle vit sur Discord, puis Twitch et YouTube, et aura un site public. Le logo doit marcher en avatar rond, en favicon, en emote et en en-tête de site, sans copier les codes d'Umamusume.",
+  "adjectives": ["rayonnante", "curieuse", "espiègle", "vive", "lucide"],
+  "criteria": "Réussite : on reconnaît son personnage (oreilles de cheval, lunettes rondes) sans dessin, le A se lit à 16 px, le logo marche en une couleur, il ne ressemble ni à un chat ni au logo de la licence.",
+  "mockups": ["social", "website", "favicon-tab", "sticker", "tshirt", "app-icon"],
+  "nav": ["Le stream", "Qui est-elle ?", "Discord"],
+  "brand_color": "#E6A752",
+  "greyscale": false,
+  "final": true,
+  "designer": "Aletheia-V3",
+  "round": 2,
+  "concepts": [
+    {
+      "name": "Le A",
+      "symbol": "../logo/aletheia-symbol.svg",
+      "lockup": "../logo/aletheia-horizontal.svg",
+      "stacked": "../logo/aletheia-stacked.svg",
+      "symbol_on_tile": "../logo/aletheia-symbol.svg",
+      "lockup_on_tile": "../logo/aletheia-horizontal.svg",
+      "stacked_on_tile": "../logo/aletheia-stacked.svg",
+      "symbol_on_dark": "../logo/aletheia-symbol-reversed.svg",
+      "lockup_on_dark": "../logo/aletheia-horizontal-reversed.svg",
+      "stacked_on_dark": "../logo/aletheia-stacked-reversed.svg",
+      "idea": "Deux oreilles de cheval penchées l'une vers l'autre forment le A ; ses lunettes rondes en font la barre.",
+      "rationale": [
+        "Ses deux signes, les oreilles et les lunettes, sont aussi ses deux sens : elle écoute et elle voit",
+        "Le symbole est la majuscule du nom : on lit « Aletheia », visage compris",
+        "Une seule couleur, des lettres construites à la main, une coupe dédiée aux petites tailles"
+      ]
+    }
+  ],
+  "recommendation": "Encre sur Papier pour le logo, Blé comme couleur signature (avatar, icône, fonds), Casaque en accent. Pas de dégradé, pas d'ombre : la forme porte tout.",
+  "next_steps": [
+    "Valider la palette et le kit",
+    "Décliner la mascotte (concept A) pour les emotes",
+    "Créer le motif « casaque » (rayures du ruban) pour le site et les overlays"
+  ]
+}

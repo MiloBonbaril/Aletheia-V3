@@ -1,0 +1,169 @@
+---
+import { render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+import Icon from "../../components/astro/Icon.astro";
+import { getLore } from "../../lib/content";
+
+export async function getStaticPaths() {
+  const chapters = await getLore();
+  return chapters.map((entry, i) => ({
+    params: { slug: entry.id },
+    props: { entry, prev: chapters[i - 1], next: chapters[i + 1] },
+  }));
+}
+
+const { entry, prev, next } = Astro.props;
+const { Content } = await render(entry);
+const num = String(entry.data.chapter).padStart(2, "0");
+---
+<Base title={`${entry.data.title} — Lore`} description={entry.data.summary}>
+  <article class="chapter">
+    <header class="hero">
+      <div class="wrap">
+        <a class="back" href="/lore"><Icon name="arrow" size={16} /> Tout le lore</a>
+        <div class="title-row">
+          <span class="num" style={`view-transition-name: num-${entry.id}`}>{num}</span>
+          <div>
+            <p class="era">Chapitre {entry.data.chapter} · {entry.data.era}</p>
+            <h1 style={`view-transition-name: title-${entry.id}`}>{entry.data.title}</h1>
+          </div>
+        </div>
+        <p class="summary">{entry.data.summary}</p>
+      </div>
+    </header>
+
+    <div class="wrap body">
+      <div class="prose">
+        <Content />
+      </div>
+    </div>
+
+    <nav class="wrap pager" aria-label="Chapitres">
+      {prev ? (
+        <a href={`/lore/${prev.id}`} class="p prev"><small>Chapitre précédent</small><b>{prev.data.title}</b></a>
+      ) : <span />}
+      {next ? (
+        <a href={`/lore/${next.id}`} class="p next"><small>Chapitre suivant</small><b>{next.data.title}</b></a>
+      ) : (
+        <a href="/planning" class="p next"><small>La suite</small><b>En direct, sur le stream</b></a>
+      )}
+    </nav>
+  </article>
+</Base>
+
+<style>
+  .hero {
+    padding-block: clamp(1.5rem, 1rem + 3vw, 4rem) clamp(2.5rem, 2rem + 3vw, 4.5rem);
+    background: var(--ble);
+    position: relative;
+  }
+  .hero::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 0.7rem;
+    background: var(--ruban);
+  }
+  .hero .wrap {
+    display: grid;
+    gap: 1.5rem;
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    justify-self: start;
+    font-weight: 600;
+    text-decoration: none;
+    padding: 0.4rem 0.9rem 0.4rem 0.7rem;
+    border-radius: 99px;
+    border: 1.5px solid var(--encre);
+    transition: background-color 0.25s, color 0.25s;
+  }
+  .back :global(svg) {
+    rotate: 180deg;
+  }
+  .back:hover {
+    background: var(--encre);
+    color: var(--ble);
+  }
+  .title-row {
+    display: flex;
+    align-items: end;
+    gap: clamp(1rem, 0.5rem + 3vw, 3rem);
+    flex-wrap: wrap;
+  }
+  .num {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(5rem, 3rem + 10vw, 12rem);
+    line-height: 0.78;
+    letter-spacing: -0.06em;
+  }
+  .era {
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+  }
+  h1 {
+    font-size: var(--step-5);
+    line-height: 0.95;
+    letter-spacing: -0.035em;
+  }
+  .summary {
+    font-size: var(--step-1);
+    max-width: 40rem;
+    color: color-mix(in oklab, var(--encre) 85%, var(--ble));
+  }
+  .body {
+    padding-block: clamp(3rem, 2rem + 4vw, 6rem);
+    display: grid;
+    justify-items: center;
+  }
+  .pager {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    padding-bottom: var(--section);
+  }
+  .p {
+    display: grid;
+    gap: 0.3rem;
+    padding: 1.5rem;
+    border-radius: var(--radius);
+    border: 1.5px solid var(--encre);
+    text-decoration: none;
+    transition: background-color 0.3s, transform 0.5s var(--ease-spring);
+  }
+  .p:hover {
+    background: var(--ble);
+    transform: translateY(-3px);
+  }
+  .next {
+    text-align: right;
+  }
+  small {
+    color: var(--fg-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.75rem;
+  }
+  b {
+    font-family: var(--font-display);
+    font-size: var(--step-2);
+    font-weight: 600;
+  }
+  @media (max-width: 600px) {
+    .pager {
+      grid-template-columns: 1fr;
+    }
+    .next {
+      text-align: left;
+    }
+  }
+</style>
