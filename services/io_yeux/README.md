@@ -17,7 +17,8 @@ only: it never speaks, it never starts the TTS, and it does not control the comp
   it is above, the service observes with `trigger: heartbeat`. Thus a small change, for example one
   error line in a terminal, becomes an observation in 30 s maximum.
 - **Observation:** it sends the screen (JPEG, 1280×720 maximum, quality 85) to the `llama-server`
-  on port 8080, with `temperature: 0`, no reasoning, and a fixed `json_schema`. The model of the
+  on port 8080, with `temperature: 0`, a reasoning of `IO_YEUX_REASONING_BUDGET` tokens maximum,
+  and a fixed `json_schema`. The schema applies after the reasoning only. The model of the
   server has no importance: Gemma-4 and Qwen3.5 are both multimodal. The prompt is factual, in
   French, with no persona. It tells the model to never copy a password, a key or a token.
 - **Publication:** it publishes the description on `io.vision.state`. The `lobe_frontal` injects
@@ -136,7 +137,8 @@ python main.py
 | `IO_YEUX_CHANGE_THRESHOLD` | `0.02` | The mean absolute difference (0 to 1) above which the service observes. |
 | `IO_YEUX_HEARTBEAT_SECONDS` | `30` | The time without publication after which the service looks at the screen again. |
 | `IO_YEUX_IDENTICAL_THRESHOLD` | `0.00005` | Below this difference, the screen is identical to the reference. On a 2560×1440 screen, a blinking cursor gives approximately 0.00004, and one error line in a terminal gives approximately 0.00012. |
-| `IO_YEUX_MAX_TOKENS` | `500` | The token limit of the answer. A limit that is too low cuts the JSON. |
+| `IO_YEUX_MAX_TOKENS` | `500` | The token limit of the JSON answer. A limit that is too low cuts the JSON. |
+| `IO_YEUX_REASONING_BUDGET` | `512` | The token limit of the reasoning before the JSON. `0` stops the reasoning. The request limit is this value plus `IO_YEUX_MAX_TOKENS`. |
 | `IO_YEUX_DEBUG_DIR` | not set | The folder of the debug mode. Not set: no file is written. |
 | `IO_YEUX_LLAMA_URL` | `http://127.0.0.1:8080/v1/chat/completions` | The chat endpoint of `llama-server`. |
 

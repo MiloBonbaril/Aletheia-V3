@@ -74,6 +74,12 @@ the streamed output with the tool calls, and a status bar.
 | `e` | Select the next reasoning effort. The service uses it at the next turn. |
 | `r` | Connect again to the llama.cpp server, and read the model data again. |
 
+The output panel shows the `reasoning_content` of each LLM call, after `💭`. It shows
+`💭 reasoning_content : (vide)` when the model did not reason. For a turn, the closing line gives
+the time from the request to the end of the reasoning. For `lobe.topic.generate`, one line gives
+the reasoning and the topic. The reasoning also goes to `lobe_frontal.log`. It never goes to
+`lobe.fragment_stream` or to the history.
+
 The input panel is read-only. Use the `io_text` service to send a message.
 
 If the llama.cpp server is not available at the start, the service does not stop. It shows a

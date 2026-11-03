@@ -26,7 +26,10 @@ HEARTBEAT_SECONDS = float(os.getenv("IO_YEUX_HEARTBEAT_SECONDS", "30"))
 # Mesuré sur un écran 2560×1440 : écran inchangé 0, curseur qui clignote ~0,00004, une ligne
 # d'erreur de terminal ~0,00012. Au-dessus du seuil, le heartbeat observe au lieu de republier.
 IDENTICAL_THRESHOLD = float(os.getenv("IO_YEUX_IDENTICAL_THRESHOLD", "0.00005"))
-MAX_TOKENS = int(os.getenv("IO_YEUX_MAX_TOKENS", "500"))
+MAX_TOKENS = int(os.getenv("IO_YEUX_MAX_TOKENS", "1000"))
+# Jetons de raisonnement avant le JSON. 0 coupe le raisonnement. Le budget s'ajoute à
+# max_tokens : un raisonnement long ne coupe jamais le JSON.
+REASONING_BUDGET = int(os.getenv("IO_YEUX_REASONING_BUDGET", "1024"))
 # Mode debug : enregistre l'image envoyée et la réponse brute, AVANT masquage. Non défini par
 # défaut. services/io_yeux/debug/ est dans .gitignore : le dépôt est public.
 DEBUG_DIR = os.getenv("IO_YEUX_DEBUG_DIR")
@@ -106,10 +109,12 @@ async def _observe(http: httpx.AsyncClient, image: Image.Image, observed_at: int
             ]},
         ],
         "temperature": 0,
-        "max_tokens": MAX_TOKENS,
-        # Sans ça, Gemma-4 raisonne d'abord et épuise max_tokens avant le JSON.
-        # Qwen3.5 lit la même variable de template.
-        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": MAX_TOKENS + REASONING_BUDGET,
+        # Gemma-4 et Qwen3.5 lisent la même variable de template. Le json_schema ne s'applique
+        # qu'après le raisonnement. Le budget borne le raisonnement : llama-server ferme la
+        # pensée à l'échéance, et le JSON garde ses MAX_TOKENS.
+        "chat_template_kwargs": {"enable_thinking": REASONING_BUDGET > 0},
+        "reasoning_budget_tokens": REASONING_BUDGET,
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": "vision_state", "schema": SCHEMA, "strict": True},
@@ -122,7 +127,8 @@ async def _observe(http: httpx.AsyncClient, image: Image.Image, observed_at: int
     body = response.json()
     choice = body["choices"][0]
     if choice.get("finish_reason") == "length":
-        raise ValueError(f"JSON coupé à {MAX_TOKENS} jetons : augmenter IO_YEUX_MAX_TOKENS")
+        raise ValueError(f"JSON coupé à {MAX_TOKENS + REASONING_BUDGET} jetons (raisonnement compris) : "
+                         "augmenter IO_YEUX_MAX_TOKENS")
     return build_state(json.loads(choice["message"]["content"]), observed_at, trigger), vlm_metrics(body)
 
 
@@ -130,6 +136,7 @@ async def main():
     print("👁️ Démarrage du service io_yeux...")
     print(f"   - Écran : {SCREEN}, {CAPTURE_FPS} capture/s, seuil={CHANGE_THRESHOLD}")
     print(f"   - Heartbeat : {HEARTBEAT_SECONDS} s, écran identique sous {IDENTICAL_THRESHOLD}")
+    print(f"   - Raisonnement : {f'{REASONING_BUDGET} jetons max' if REASONING_BUDGET > 0 else 'coupé'}")
     if DEBUG_DIR:
         print(f"   - Mode debug : images et réponses brutes, non masquées, dans {os.path.abspath(DEBUG_DIR)}")
 

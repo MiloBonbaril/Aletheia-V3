@@ -147,9 +147,10 @@ class OpenAIInterface:
 
         return details
 
-    async def get_completion(self, messages: list, model, temperature, top_p) -> str:
+    async def get_completion(self, messages: list, model, temperature, top_p) -> tuple[str, str]:
         """Appel non-streaming, sans tools, pour une réflexion silencieuse ponctuelle
-        (ex: lobe.topic.generate, #15) — jamais lié à lobe.fragment_stream."""
+        (ex: lobe.topic.generate, #15) — jamais lié à lobe.fragment_stream.
+        Rend (contenu, reasoning_content) ; le second vaut "" si le serveur n'en donne pas."""
         response = await self.openai_client.chat.completions.create(
             messages=messages,
             model=model,
@@ -157,13 +158,16 @@ class OpenAIInterface:
             temperature=temperature,
             top_p=top_p,
         )
-        return (response.choices[0].message.content or "").strip()
+        message = response.choices[0].message
+        # reasoning_content n'est pas un champ du SDK OpenAI : il passe en attribut extra.
+        return (message.content or "").strip(), getattr(message, "reasoning_content", None) or ""
 
     async def get_stream(self, messages: list, model, tools, temperature, top_p, reasoning_effort):
         logger.info("Envoi immédiat de la requête LLM...")
-        # reasoning_effort est ignoré par llama.cpp (vérifié en direct) ; le
-        # vrai interrupteur pour ce backend est chat_template_kwargs.enable_thinking,
-        # qu'on dérive donc nous-mêmes de reasoning_effort.
+        # llama.cpp lit reasoning_effort ("none" coupe le raisonnement, une autre valeur
+        # passe au template), mais l'interrupteur que tous les templates lisent est
+        # chat_template_kwargs.enable_thinking : on le dérive donc nous-mêmes de
+        # reasoning_effort. Les pensées arrivent dans delta.reasoning_content.
         enable_thinking = str(reasoning_effort).strip().lower() != "none"
         return await self.openai_client.chat.completions.create(
             messages=messages,

@@ -20,6 +20,30 @@ def next_effort(current: str, options: list[str]) -> str:
     return options[idx]
 
 
+class ReasoningTrace:
+    """Le reasoning_content d'une itération, tel que le panneau de sortie le montre : streamé
+    derrière « 💭 », puis une ligne de clôture au premier contenu, au premier appel d'outil ou à
+    la fin du flux. Vide, il s'affiche quand même. Rend du texte, n'écrit rien : testable sans TUI."""
+
+    def __init__(self, start: float):
+        self.start = start
+        self.text = ""
+        self.closed = False
+
+    def feed(self, token: str) -> str:
+        shown = token if self.text else "💭 " + token
+        self.text += token
+        return shown
+
+    def close(self, now: float) -> str:
+        if self.closed:
+            return ""
+        self.closed = True
+        if not self.text:
+            return "💭 reasoning_content : (vide)\n"
+        return f"\n💭 fin du raisonnement à {now - self.start:.2f} s\n"
+
+
 class LobeTUI(App):
     """
     Vitrine de debug : panneau de prompt en lecture seule (gauche) + sortie
@@ -142,6 +166,15 @@ def _self_check():
     assert next_effort("none", []) == "none"  # liste vide -> rien à cycler
     assert next_effort("only", ["only"]) == "only"  # liste à un seul élément
     print("OK: next_effort self-check passed")
+
+    empty = ReasoningTrace(start=0.0)
+    assert empty.close(now=1.0) == "💭 reasoning_content : (vide)\n"
+    assert empty.close(now=2.0) == ""  # une seule clôture par itération
+    trace = ReasoningTrace(start=10.0)
+    assert trace.feed("Je ") + trace.feed("pense.") == "💭 Je pense."
+    assert trace.text == "Je pense."
+    assert trace.close(now=11.5) == "\n💭 fin du raisonnement à 1.50 s\n"
+    print("OK: ReasoningTrace self-check passed")
 
 
 if __name__ == "__main__":

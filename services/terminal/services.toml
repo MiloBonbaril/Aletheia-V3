@@ -76,12 +76,16 @@ kind = "process"
 cwd = "."
 depends_on = []
 ready_tcp = "127.0.0.1:8080"
-note = "Qwen3.5 4B Q6_K with the mmproj, no thinking. Do not start it with llama-server."
+note = "Qwen3.5 4B Q6_K with a DFlash draft model, no thinking. Do not start it with llama-server."
 cmd = [
   "/home/milo/.local/bin/llama-server",
   "-m", "/home/milo/Forge/ai/models/Qwen3.5/4B/Qwen3.5-4B-Q6_K.gguf",
-  "--mmproj", "/home/milo/Forge/ai/models/Qwen3.5/4B/mmproj-BF16.gguf",
+  "--model-draft", "/home/milo/Forge/ai/models/Qwen3.5/4B/Qwen3.5-4B-DFlash.Q8_0.gguf",
+  "--spec-type", "draft-dflash",
+  "--spec-draft-n-min", "0",
+  "--spec-draft-n-max", "8",
   "-ngl", "all",
+  "-ngld", "all",
   "-c", "32768",
   "-fa", "on",
   "-ctk", "q8_0",

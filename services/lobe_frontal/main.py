@@ -21,7 +21,7 @@ from OpenAI.interface import OpenAIInterface
 from src.prompt_builder import PromptBuilder
 from src.fragments import take_fragment
 from src.turn_queue import is_for_turn, take_latest
-from tui import LobeTUI
+from tui import LobeTUI, ReasoningTrace
 
 load_dotenv()
 
@@ -230,10 +230,12 @@ async def main():
         aucune contrainte de latence (#15), donc attendre son tour ici ne coûte rien."""
         try:
             async with INFERENCE_SEMAPHORE:
-                topic = await interface.get_completion(prompt_builder.build_topic_prompt(), MODEL, TEMPERATURE, TOP_P)
+                topic, thought = await interface.get_completion(prompt_builder.build_topic_prompt(), MODEL, TEMPERATURE, TOP_P)
         except Exception as e:
             logger.error(f"Erreur lobe.topic.generate: {e}")
-            topic = ""
+            topic, thought = "", ""
+        logger.info(f"💭 reasoning_content (topic) : {thought!r}")
+        tui_app.append_output(f"\n💭 topic · reasoning_content : {thought or '(vide)'}\n→ sujet : {topic or '(aucun)'}\n")
         await nc.publish(msg.reply, json.dumps({"topic": topic}).encode())
 
     await nc.subscribe("lobe.topic.generate", queue="lobe_workers", cb=topic_generate_handler)
@@ -395,8 +397,11 @@ async def main():
             while turn_count < MAX_TOOL_ITERATIONS:
                 turn_count += 1
                 try:
+                    # Le chrono part avant la requête : la clôture du raisonnement dit quand
+                    # le premier mot devient possible, préfill compris.
+                    trace = ReasoningTrace(time.monotonic())
                     stream = await interface.get_stream(messages, MODEL, prompt_builder.tools_schema, TEMPERATURE, TOP_P, tui_app.current_effort)
-                    
+
                     tool_calls_dict = {}
                     collected_content = ""
                     finish_reason = None
@@ -407,10 +412,17 @@ async def main():
                     async for chunk in stream:
                         if not chunk.choices: continue
                         delta = chunk.choices[0].delta
-                        
+
+                        # Raisonnement : affiché dans le TUI, jamais publié ni écrit en mémoire.
+                        # reasoning_content n'est pas un champ du SDK OpenAI : attribut extra.
+                        thought = getattr(delta, "reasoning_content", None)
+                        if thought:
+                            tui_app.append_output(trace.feed(thought))
+
                         # Accumulation textuelle
                         token = getattr(delta, "content", None)
                         if token:
+                            tui_app.append_output(trace.close(time.monotonic()))
                             collected_content += token
                             overall_response_fragments.append(token)
                             text_buffer += token
@@ -424,6 +436,7 @@ async def main():
 
                         # Agrégation des chunks d'outils (Streaming de l'appel d'outil)
                         if getattr(delta, "tool_calls", None):
+                            tui_app.append_output(trace.close(time.monotonic()))
                             for tc_chunk in delta.tool_calls:
                                 idx = tc_chunk.index
                                 if idx not in tool_calls_dict:
@@ -451,6 +464,8 @@ async def main():
                     
                     tool_calls = list(tool_calls_dict.values())
 
+                    tui_app.append_output(trace.close(time.monotonic()))  # flux sans contenu ni outil
+                    logger.info(f"💭 reasoning_content (tour {turn_count}) : {trace.text!r}")
                     tui_app.append_output(f"\n── Tour {turn_count}/{MAX_TOOL_ITERATIONS} · finish_reason={finish_reason} ──\n")
 
                     if tool_calls and finish_reason == "tool_calls":
