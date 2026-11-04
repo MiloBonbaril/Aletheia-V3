@@ -122,7 +122,7 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
 - **io_yeux** (`services/io_yeux`, Python) — the vision of the screen. It captures the active
   screen once each second through the KWin D-Bus interface `ScreenShot2`, in memory only. It
   compares a 160×90 grayscale copy with the reference, which is the capture of the last successful
-  observation. Above the threshold, it sends the screen (JPEG, 1280×720) to `llama-server` with a
+  observation. Above the threshold, it sends the screen (JPEG, 1920×1080) to `llama-server` with a
   fixed `json_schema`, and it publishes the description on `io.vision.state`. The `lobe_frontal`
   injects the last state in a `<vision>` block at the start of the last user message, not in the
   system prompt, to keep the prefix cache. No image goes into the conversation. During an
