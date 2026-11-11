@@ -59,10 +59,15 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
     use NATS. Run it on an idle GPU. Run `python eval/dump_history.py` first, or the bench measures
     the `froid` scenario only.
   - `synth/` is an offline generator of synthetic training data for a student model (LFM3-1.7B).
-    It does not use NATS. It uses `PromptBuilder` and copies the tool loop, the queue and the
-    history of the production. Gemma 4 12B on vLLM (`127.0.0.1:8000`, thinking mode) plays
-    Aletheia and the regular users of `synth/personas.json`. Each turn of Aletheia gives one sample
-    in `synth/out/*.jsonl`. `synth/out/stats.json` gives the counters of the run.
+    It does not use NATS. It uses `PromptBuilder` and copies the tool loop, the queue, the
+    history and the RAG (`all-MiniLM-L6-v2`, threshold 0.5) of the production. Gemma 4 12B on vLLM
+    (`127.0.0.1:8000`) plays Aletheia and the regular users of `synth/personas.json`. The teacher
+    gets a reflection protocol: a short French reflection before each answer and each tool call.
+    The protocol never goes into the samples; the reflection goes into `reasoning_content`. The
+    native thinking of Gemma does not follow the protocol, thus it is off. Each turn of Aletheia
+    gives one sample in `synth/out/*.jsonl`. `synth/out/stats.json` gives the counters of the run.
+    `synth/out/memory_bank.json` is the memory of the generator: the real memories, the past
+    `save_to_memory` calls, the facts of the system prompt and memories that Gemma writes.
     `python -m synth.to_sft` keeps the samples with no reject, in the format of LFM3.
 - **hippocampe** (`services/hippocampe`, Python) — the memory. PostgreSQL (`database.py`) keeps the
   conversation history. Qdrant (`rag_manager.py`) keeps the vector memory. The RAG recall is
