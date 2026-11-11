@@ -58,6 +58,12 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   - `eval/` is an isolated multi-model bench. It speaks HTTP directly to `llama-server`. It does not
     use NATS. Run it on an idle GPU. Run `python eval/dump_history.py` first, or the bench measures
     the `froid` scenario only.
+  - `synth/` is an offline generator of synthetic training data for a student model (LFM3-1.7B).
+    It does not use NATS. It uses `PromptBuilder` and copies the tool loop, the queue and the
+    history of the production. Gemma 4 12B on vLLM (`127.0.0.1:8000`, thinking mode) plays
+    Aletheia and the regular users of `synth/personas.json`. Each turn of Aletheia gives one sample
+    in `synth/out/*.jsonl`. `synth/out/stats.json` gives the counters of the run.
+    `python -m synth.to_sft` keeps the samples with no reject, in the format of LFM3.
 - **hippocampe** (`services/hippocampe`, Python) — the memory. PostgreSQL (`database.py`) keeps the
   conversation history. Qdrant (`rag_manager.py`) keeps the vector memory. The RAG recall is
   **passive**: it runs automatically for each `hippocampe.context.build` request, in parallel with
@@ -239,7 +245,9 @@ The services interact only through NATS. When you change a payload or add a topi
 
 This repository is public. Do not commit real conversation data. The history dumps of the eval bench
 (`services/lobe_frontal/eval/fixtures/`) and the measurement results
-(`services/lobe_frontal/eval/results/`) are in `.gitignore`. Keep them there.
+(`services/lobe_frontal/eval/results/`) are in `.gitignore`. The synthetic data
+(`services/lobe_frontal/synth/out/`) is in `.gitignore` too: it contains real names and real
+memories. Keep them there.
 
 ## Agent skills
 

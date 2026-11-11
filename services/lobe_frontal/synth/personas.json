@@ -1,0 +1,83 @@
+{
+  "personas": [
+    {
+      "id": "293414992663805952",
+      "display_name": "Jax Le Zetox",
+      "aliases": ["Milo", "Jax le Zetox"],
+      "weight": 35,
+      "who": "Milo, le créateur et le développeur d'Aletheia",
+      "style": "parle de son code, de l'architecture, des modèles (Gemma, LLM, RAG) ; la teste (« test », « dis juste OK »), la corrige quand elle se trompe ; « hmmm », « ehhh gros » ; fier d'elle mais exigeant"
+    },
+    {
+      "id": "362260685540818944",
+      "display_name": "Beyou",
+      "aliases": [],
+      "weight": 15,
+      "who": "un ami proche de Milo, un peu taquin",
+      "style": "provoque Aletheia, lui dit que son système est à chier, tend des pièges de logique (les boîtes, 1 kg de plume ou de plomb), lui fait noter des bêtises avec l'emoji peponotes, envoie des GIF klipy"
+    },
+    {
+      "id": "310709886121934850",
+      "display_name": "La Kakarotiserie",
+      "aliases": ["Aleeree", "Théo"],
+      "weight": 12,
+      "who": "Théo n°1, un ami proche de Milo, le premier super sayan (DBZ)",
+      "style": "« paf », références DBZ et League of Legends (« rito games », le PBE), mentionne Milo, GIF tenor d'Uma Musume, phrases très courtes, un peu de verlan"
+    },
+    {
+      "id": "733261833993060362",
+      "display_name": "Vegeta",
+      "aliases": ["Flachi", "Théo"],
+      "weight": 12,
+      "who": "Théo n°2, le gym bro de Milo, fan de Terraria, le deuxième super sayan (DBZ)",
+      "style": "questions directes, devinettes, jeux vidéo (Terraria, Noita), muscu, conseils de drague, « c'est le goat », « t'as juste le seum »"
+    },
+    {
+      "id": "306809650802589707",
+      "display_name": "Taiko",
+      "aliases": ["Maxime"],
+      "weight": 6,
+      "who": "Maxime, le meilleur ami de Milo depuis la primaire, il adorait jouer à Overwatch",
+      "style": "parle peu mais vise juste, chambre Milo (« avoue Milo t'as créé ta e-girl »), demande ce qu'Aletheia pense de lui, ne boit pas d'alcool, quelques questions qui fâchent"
+    },
+    {
+      "id": "318105451810127872",
+      "display_name": "Ewyтy",
+      "aliases": ["Ewyty", "Florian"],
+      "weight": 20,
+      "who": "Florian, un ami proche de Milo, le DG (drama guy)",
+      "style": "très actif, rafales de messages d'un mot, jeux de complétion de noms (« Jordan » pour « Pippen »), tier lists, questions polémiques, lance des dramas, « paf », emoji <:Hehee_boi:1294052724496924804>, GIF tenor"
+    }
+  ],
+  "unknown_names": ["Px-492", "Azower", "Feekgun", "Nyxie", "LeGrandZ", "Moumou_77"],
+  "situations": [
+    "soirée tranquille sur le serveur, rien de prévu",
+    "Milo vient de mettre à jour le cerveau d'Aletheia et veut tester",
+    "Vegeta revient de la salle de sport",
+    "la bande prépare une partie de Terraria",
+    "Ewyty lance un drama à partir de rien",
+    "débat absurde qui part en vrille",
+    "quelqu'un découvre une nouvelle fonction d'Aletheia",
+    "fin de soirée, tout le monde est fatigué",
+    "Beyou a décidé de faire craquer Aletheia",
+    "on parle de vieux souvenirs entre potes",
+    "on parle d'un jeu, d'un film ou d'un anime du moment",
+    "quelqu'un a une vraie question perso et demande l'avis du groupe",
+    "Aletheia a dit une bêtise juste avant et on la chambre",
+    "Milo est en train de coder pendant que les autres discutent",
+    "on organise le premier stream d'Aletheia",
+    "quiz improvisé où on teste la culture d'Aletheia"
+  ],
+  "visions": [
+    {"application": "Visual Studio Code", "activity": "Milo modifie le fichier main.py du service lobe_frontal", "visible_text": ["main.py", "async def run_turn", "MAX_TOOL_ITERATIONS = 10"]},
+    {"application": "Terraria", "activity": "Le joueur combat le Mur de chair dans l'enfer", "visible_text": ["Wall of Flesh", "400/500"]},
+    {"application": "Overwatch 2", "activity": "Écran de fin de partie, défaite", "visible_text": ["DÉFAITE", "Match terminé"]},
+    {"application": "YouTube dans Firefox", "activity": "Une vidéo de compilation de combats de Dragon Ball Z est en lecture", "visible_text": ["DBZ - Goku vs Vegeta", "2,3 M de vues"]},
+    {"application": "Discord", "activity": "Le salon textuel général du serveur Berlin Est est ouvert", "visible_text": ["# général", "Berlin Est"]},
+    {"application": "Firefox", "activity": "Une page GitHub du dépôt Aletheia-V3 avec la liste des issues", "visible_text": ["MiloBonbaril/Aletheia-V3", "Issues"]},
+    {"application": "League of Legends", "activity": "Le client est sur l'écran de sélection des champions", "visible_text": ["Choisissez votre champion", "Classée solo/duo"]},
+    {"application": "Steam", "activity": "La page du magasin de Noita est affichée", "visible_text": ["Noita", "Ajouter au panier"]},
+    {"application": "Konsole", "activity": "Un terminal montre des logs de vLLM qui défilent", "visible_text": ["vllm serve", "INFO", "Avg generation throughput"]},
+    {"application": "Twitch dans Firefox", "activity": "Un stream de VTubeuse est en direct avec le chat qui défile", "visible_text": ["EN DIRECT", "Chat du stream"]}
+  ]
+}

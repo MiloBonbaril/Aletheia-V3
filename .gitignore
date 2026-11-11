@@ -42,6 +42,8 @@ services/io_voix/models
 services/lobe_frontal/eval/results/
 # Dump d'historique réel : conversations Discord de tiers, dépôt public
 services/lobe_frontal/eval/fixtures/
+# Données synthétiques : vrais pseudos, vrais souvenirs, dépôt public
+services/lobe_frontal/synth/out/
 *.bak
 
 # Mode debug de io_yeux : captures et réponses brutes, non masquées

@@ -260,7 +260,8 @@ class PromptBuilder:
         if now_ms is None:
             now_ms = int(current_time * 1000)
         vision = self._build_vision_xml(now_ms) if self.vision else ""
-        prefix = vision + f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+        # L'horodatage suit now_ms : le générateur synthétique (synth/) simule l'heure.
+        prefix = vision + f"[{datetime.fromtimestamp(now_ms / 1000).strftime('%Y-%m-%d %H:%M:%S')}] "
         if images or audio:
             user_content = []
             if prompt:
