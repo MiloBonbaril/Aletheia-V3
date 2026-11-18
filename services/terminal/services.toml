@@ -132,6 +132,30 @@ cmd = [
   "--port", "8080",
 ]
 
+# LFM3 1.7B with the Aletheia LoRA V2 (LLM_RESEARCH, 2026-11-15), merged and quantized to Q8_0.
+# The GGUF holds the sampling of Liquid: temp 0.1, top_k 50, repeat penalty 1.1. lobe_frontal
+# sends its own temperature and top_p, thus set TEMPERATURE=0.1 in services/lobe_frontal/.env.
+# There is no mmproj: for the vision, start llama-server-lfm3-vl and io_yeux_lfm with it.
+[[service]]
+name = "llama-server-aletheia"
+group = "Cognition"
+kind = "process"
+cwd = "."
+depends_on = []
+ready_tcp = "127.0.0.1:8080"
+note = "LFM3 1.7B + LoRA Aletheia V2, Q8_0. Set TEMPERATURE=0.1 in the .env of lobe_frontal. Do not start it with another server on port 8080."
+cmd = [
+  "/home/milo/.local/bin/llama-server",
+  "-m", "/mnt/forge/dev/LLM_RESEARCH/train/out/lfm3-aletheia-v2/gguf/aletheia-Q8_0.gguf",
+  "-ngl", "all",
+  "-c", "32768",
+  "-fa", "on",
+  "-np", "1",
+  "--jinja",
+  "--host", "127.0.0.1",
+  "--port", "8080",
+]
+
 # The two entries below run together: Luth on 8080 for lobe_frontal, LFM3-VL on 8081 for
 # io_yeux_lfm. The sampling comes from the general.sampling keys of each GGUF file.
 

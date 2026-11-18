@@ -61,7 +61,8 @@ def test_no_profile_starts_two_services_that_share_a_device():
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
     for name, members in manifest.profiles.items():
         for group in ({"io_voix", "io_voix_muet"}, {"io_oreilles", "io_oreilles_discord"},
-                      {"llama-server", "llama-server-qwen", "llama-server-bonsai", "llama-server-luth"}):
+                      {"llama-server", "llama-server-qwen", "llama-server-bonsai", "llama-server-luth",
+                       "llama-server-aletheia"}):
             assert len(group & set(members)) <= 1, f"le profil {name} lance {group} ensemble"
 
 
