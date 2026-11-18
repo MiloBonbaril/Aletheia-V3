@@ -469,9 +469,14 @@ async def main():
                     tui_app.append_output(f"\n── Tour {turn_count}/{MAX_TOOL_ITERATIONS} · finish_reason={finish_reason} ──\n")
 
                     if tool_calls and finish_reason == "tool_calls":
+                        # La réflexion du pas d'outil revient dans l'historique du tour : les templates
+                        # (Qwen3.5, LFM3, Gemma 4) la rendent après le dernier message utilisateur, comme
+                        # à l'entraînement. Sans elle, le pas suivant relance un outil 5-6 % du temps
+                        # (souvent un 2e get_from_memory) : LLM_RESEARCH, eval_gen.py suivi.
                         messages.append({
                             "role": "assistant",
                             "content": collected_content or None,
+                            **({"reasoning_content": trace.text} if trace.text else {}),
                             "tool_calls": tool_calls
                         })
 
