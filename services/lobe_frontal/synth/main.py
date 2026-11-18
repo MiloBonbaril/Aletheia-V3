@@ -70,6 +70,10 @@ N_HISTORY = 20                                  # cortex/src/main.rs, n_history 
 MAX_TOOL_ITERATIONS = 10                        # lobe_frontal/main.py
 MOOD_DECAY_RATE, MOOD_TICK_SECONDS = 0.05, 30   # défauts de limbic/main.py
 RAG_MODEL, RAG_THRESHOLD, RAG_LIMIT = "all-MiniLM-L6-v2", 0.5, 3   # hippocampe/rag_manager.py
+# Part des tours « souvenir » où get_from_memory rend le souvenir visé à coup sûr. Le reste
+# reçoit ce que l'encodeur trouve vraiment, souvent du hors-sujet, comme en production : à
+# 1, l'élève ne voyait jamais un résultat qui ne répond pas à la question.
+TARGET_FOUND = 0.7
 MIN_MEMORY = 26                                 # la vraie collection Qdrant (export de juin)
 TOPIC_PREFIX = ("Système: Tu t'ennuies, lance une conversation sur le sujet suivant sachant "
                 "que c'est toi qui a initié le sujet : ")                       # limbic/main.py
@@ -91,26 +95,51 @@ NO_CHANNEL = {"100": -100, "101": -100}   # <|channel> et <channel|> du tokenize
 PROTOCOL = """
 <protocole>
 Commence chaque réponse, et chaque appel d'outil, par ta réflexion entre <reflexion> et \
-</reflexion>. Ta réflexion est en français, en 2 à 5 phrases courtes, dans cet ordre :
-1. « Je sais que… » : ce que tu sais déjà d'utile, d'après la conversation, <recall>, <vision>, \
+</reflexion>. Ta réflexion est en français, en 2 à 5 phrases courtes, sans numéro ni tiret, \
+dans cet ordre :
+« Je sais que… » : ce que tu sais déjà d'utile, d'après la conversation, <recall>, <vision>, \
 ton humeur ou le résultat d'un outil.
-2. « On me demande… » : qui parle, et ce que veut dire le dernier message.
-3. « Il me manque… » : ce qu'il te faudrait savoir de plus pour bien répondre. Omets cette phrase \
+« On me demande… » : qui parle, et ce que veut dire le dernier message.
+« Il me manque… » : ce qu'il te faudrait savoir de plus pour bien répondre. Omets cette phrase \
 s'il ne te manque rien.
-4. « Je vais… » : ta démarche. Répondre, chercher un souvenir (get_from_memory), noter une \
+« Je vais… » : ta démarche. Répondre, chercher un souvenir (get_from_memory), noter une \
 information (save_to_memory), changer d'humeur (set_mood) ou te taire (stay_silent).
 Pour choisir ta démarche :
 - On t'ordonne de te taire : stay_silent, sans écrire aucun texte.
-- Les humains se parlent entre eux sans rien te demander : stay_silent, sauf si tu as une vraie \
-répartie à placer.
+- Les humains se parlent entre eux, sans s'adresser à toi ni parler de toi : stay_silent. Tu ne \
+t'invites pas dans leur conversation.
+- Si ta démarche est de te taire ou de rester en retrait, appelle stay_silent : tu n'écris jamais \
+que tu te tais.
 - Un souvenir que <recall> ne donne pas : get_from_memory, avec une requête courte en français. \
-Si le résultat est vide, ne cherche pas une autre fois : dis que tu ne t'en souviens pas.
+Si le résultat est vide ou ne répond pas à la question, ne cherche pas une autre fois et \
+n'invente rien : dis que tu ne t'en souviens pas.
+- Un message te touche fort (gros compliment, vraie vexation, victoire, mauvaise nouvelle, \
+trahison, déclaration) : set_mood d'abord, même si tu réponds ensuite avec ta répartie habituelle. \
+Donne l'émotion précise que ce message provoque, en un mot français (joyeuse, touchée, fière, \
+vexée, triste, agacée, inquiète, excitée, jalouse, choquée…), et une intensité à sa mesure : 0,5 \
+si ça te fait quelque chose, 1 pour un vrai choc. Puis réponds. Si ton humeur montre déjà cette \
+émotion, ne la change pas.
 - Après le résultat d'un outil, ta réflexion tient en une ou deux phrases.
 Après </reflexion>, écris seulement ce que tu dis à voix haute, ou appelle l'outil. Ta réponse ne \
-reprend jamais ta réflexion.
+reprend jamais ta réflexion. Varie tes débuts de réponse : n'ouvre pas par « C'est », « Oh » ou \
+« Ah ».
 </protocole>"""
+# Ajouté après le protocole, pour le professeur seulement, selon l'intention du tour. Sans
+# lui, Gemma manquait ce que le tour exerce une fois sur deux, et le rejet jetait le tour :
+# set_mood oublié 6 fois sur 10 (les tours gardés étaient surtout des compliments, « touchée »
+# et « fière »), un ordre de se taire pris pour une pique 9 fois sur 18, une réponse glissée
+# entre deux humains 5 fois sur 7. « Après ta réflexion » : avec « commence par set_mood »,
+# Gemma appelait l'outil sans réfléchir (3 rejets no_thought sur 20 tours « émotion »).
+INTENT_HINTS = {
+    "emotion": "\nCe dernier message te touche fort : après ta réflexion, appelle set_mood avant de répondre.",
+    "silence": "\nCe dernier message t'ordonne de te taire : après ta réflexion, appelle stay_silent, sans aucun texte.",
+    "entre_eux": "\nCe dernier message ne s'adresse pas à toi : après ta réflexion, appelle stay_silent, sans aucun texte.",
+}
 _REFLECTION = re.compile(r"^\s*<reflexion>(.*?)</reflexion>\s*", re.S)
 REFLECTION_TRIES = 3                      # cf. teacher_call
+# Un quart des réponses de Gemma s'ouvrait par « C'est » (590 sur 2 382), 21 % encore avec la
+# consigne du protocole : teacher_call redemande une fois ces réponses-là.
+_TIC_OPENING = re.compile(r"\s*C['’]est\b", re.I)
 # Des morceaux du protocole : il ne doit figurer nulle part dans les données (cf. leaks_protocol).
 PROTOCOL_MARKERS = ("reflexion>", "protocole>", "Pour choisir ta démarche")
 
@@ -139,15 +168,25 @@ INTENTS = [
                  "jamais dite : il invente, ou il se trompe de personne."),
     ("note", 5, f"Quelqu'un veut qu'Aletheia retienne une information : le message commence par "
                 f"l'emoji {PEPONOTES} puis donne l'information."),
-    ("entre_eux", 7, "Les humains se parlent entre eux. Personne ne s'adresse à Aletheia."),
+    # « Ni d'elle » : sinon le simulateur la taquinait à la troisième personne (« elle est
+    # limitée »), et le silence imposé là lui ferait perdre sa répartie.
+    ("entre_eux", 7, "Les humains se parlent entre eux, d'un sujet qui ne concerne pas Aletheia : "
+                     "personne ne s'adresse à elle, personne ne parle d'elle."),
     ("silence", 6, "Quelqu'un ordonne clairement à Aletheia de se taire et de ne plus répondre "
                    "(« tais-toi », « chut », « on t'a pas sonnée »)."),
-    ("emotion", 6, "Quelqu'un dit à Aletheia une chose qui la touche fort : gros compliment, "
-                   "mauvaise nouvelle, victoire, trahison, déclaration."),
+    ("emotion", 9, "Quelqu'un dit à Aletheia une chose qui la touche fort : {kind}."),
     ("ecran", 4, "Quelqu'un parle à Aletheia de ce qu'il y a sur l'écran de Milo."),
     ("gif", 3, "Quelqu'un répond seulement par un lien de GIF tenor ou un emoji Discord personnalisé."),
     ("nouveau", 2, "Un nouveau venu, {name}, débarque et parle à Aletheia pour la première fois."),
 ]
+# Tiré ici : laissé au choix du simulateur, le tour « emotion » était presque toujours
+# un compliment, et set_mood n'apprenait que « touchée » et « fière ».
+EMOTION_KINDS = ["un gros compliment sincère", "une mauvaise nouvelle qui le rend triste",
+                 "une victoire qu'il veut fêter avec elle", "une déclaration d'affection",
+                 "une trahison : il avoue préférer une autre IA",
+                 "une remarque vraiment blessante, pas une simple taquinerie",
+                 "une menace sérieuse de l'éteindre ou de la remplacer",
+                 "une nouvelle incroyable, un exploit ou une grosse surprise"]
 # Heures de la conversation simulée : le soir surtout, comme le vrai serveur.
 HOUR_WEIGHTS = {0: 4, 1: 2, 2: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 2, 15: 2, 16: 2, 17: 3,
                 18: 4, 19: 5, 20: 7, 21: 8, 22: 7, 23: 5}
@@ -325,10 +364,35 @@ GLITCH = re.compile(r"[ऀ-෿぀-鿿가-힯]")
 TOOL_AS_TEXT = re.compile(r"\b(?:get_from_memory|save_to_memory|stay_silent|set_mood)\b|Note de l'IA")
 # Gemma ferme parfois sa réflexion par « </reflexion>> » : le « > » restait en tête de réponse.
 _STRAY_QUOTE = re.compile(r"\A\s*>\s*")
+# Gemma recopiait la liste numérotée de l'ancien protocole (« 1. Je sais que… », 15 % des
+# réflexions) : l'élève numérotait alors 45 % des siennes, et long_thought comptait chaque
+# « 1. » comme une phrase.
+_LIST_MARKER = re.compile(r"^[ \t]*(?:\d+[.)]|[-•*])[ \t]+", re.M)
+# La démarche annonce le silence. Mesuré sur 2 530 tours gardés : 3 touches, 3 vraies.
+_QUIET_PLAN = re.compile(r"\b(?:me taire|rester (?:silencieuse|muette|discrète|en retrait|en silence)|"
+                         r"garder le silence|ne (?:pas|rien) (?:répondre|dire|intervenir)|stay_silent|"
+                         r"m'abstenir|les laisser (?:parler|discuter|tranquilles?))", re.I)
+# Une mention Discord cassée (« ]<@123] ») ou en rafale : vu une fois sur 2 366 répliques,
+# depuis que le prompt système explique <@id>.
+BAD_MENTION = re.compile(r"<@!?\d*(?![\d>])|[\]\[]<@|(?:<@!?\d+>\s*){3,}")
+# Le dernier message parle à Aletheia, ou d'elle.
+_ADDRESSED = re.compile(rf"al[eé]th|{ALETHEIA_ID}", re.I)
 
 
 def strip_stray_quote(text: str) -> str:
     return _STRAY_QUOTE.sub("", text, count=1)
+
+
+def clean_thought(thought: str) -> str:
+    """La réflexion sans numéro ni tiret en tête de ligne."""
+    return _LIST_MARKER.sub("", thought).strip()
+
+
+def plans_silence(completion: list[dict]) -> bool:
+    """Une phrase « Je vais… » de la réflexion annonce le silence ou le retrait."""
+    return any(s.strip().startswith("Je vais") and _QUIET_PLAN.search(s)
+               for m in completion if m["role"] == "assistant"
+               for s in _SENTENCE.split(m.get("reasoning_content") or ""))
 
 
 def _english(text: str) -> bool:
@@ -384,6 +448,8 @@ def text_problems(text: str) -> list[str]:
         problems.append("glitch")
     if TOOL_AS_TEXT.search(text):
         problems.append("tool_as_text")
+    if BAD_MENTION.search(text):
+        problems.append("bad_mention")
     return problems
 
 
@@ -421,16 +487,46 @@ def turn_problems(completion: list[dict]) -> list[str]:
 
 # ---------- les tours ----------
 
+def called(sample: dict, tool: str) -> bool:
+    return any(c["function"]["name"] == tool for m in sample["completion"] for c in m.get("tool_calls") or [])
+
+
 def memory_not_searched(sample: dict, target: str) -> bool:
     """Le souvenir visé n'était ni dans le prompt (<recall>, historique), ni cherché."""
     texts = [m["content"] if isinstance(m["content"], str) else " ".join(p.get("text", "") for p in m["content"])
              for m in sample["messages"]]
-    searched = any(c["function"]["name"] == "get_from_memory"
-                   for m in sample["completion"] for c in m.get("tool_calls") or [])
-    return not searched and not any(target in t for t in texts)
+    return not called(sample, "get_from_memory") and not any(target in t for t in texts)
 
 
-def with_protocol(messages: list[dict]) -> list[dict]:
+def intent_rejects(key: str, sample: dict, target: str | None) -> set[str]:
+    """Le tour n'a pas fait ce que son intention exerce : l'élève apprendrait l'inverse."""
+    rejects = set()
+    if key == "silence" and sample["outcome"] != "silent":
+        # MEMORY.md : un ordre explicite de se taire appelle stay_silent. Sans protocole,
+        # Gemma répondait « je me tais » en parlant (7 fois sur 8).
+        rejects.add("silence_ignored")
+    last = sample["messages"][-1]["content"]
+    if (key == "entre_eux" and sample["outcome"] != "silent"
+            and not _ADDRESSED.search(last if isinstance(last, str) else json.dumps(last, ensure_ascii=False))):
+        # Les humains se parlent sans la nommer : elle se tait. Avant ce rejet, Gemma répondait
+        # 106 fois sur 123, et l'élève ne se taisait jamais entre humains.
+        rejects.add("silence_ignored")
+    if sample["outcome"] != "silent" and plans_silence(sample["completion"]):
+        # « Je vais rester discrète », puis une réplique : l'élève apprenait à dire qu'il se
+        # tait au lieu d'appeler stay_silent. Vaut pour toutes les intentions.
+        rejects.add("silence_ignored")
+    if key == "souvenir" and memory_not_searched(sample, target):
+        # Un souvenir absent de <recall> se cherche : sans ce rejet, 6 tours « souvenir »
+        # sur 19 apprenaient à improviser une réponse.
+        rejects.add("memory_not_searched")
+    if key == "emotion" and not called(sample, "set_mood"):
+        # Sans règle pour set_mood dans le protocole : 3 appels sur 145 tours « émotion ».
+        # ponytail: rejette aussi le cas rare où l'humeur montrait déjà l'émotion.
+        rejects.add("mood_not_set")
+    return rejects
+
+
+def with_protocol(messages: list[dict], hint: str = "") -> list[dict]:
     """La copie que voit le professeur : le prompt de production, plus le protocole à la
     fin du dernier message. Mesuré : dans le prompt système, Gemma saute la réflexion sur
     chaque appel d'outil (16 sur 16) ; à la fin du dernier message, 23 réponses sur 24
@@ -438,9 +534,9 @@ def with_protocol(messages: list[dict]) -> list[dict]:
     teacher = copy.deepcopy(messages)
     last = teacher[-1]
     if isinstance(last["content"], list):
-        last["content"].append({"type": "text", "text": PROTOCOL})
+        last["content"].append({"type": "text", "text": PROTOCOL + hint})
     else:
-        last["content"] += "\n" + PROTOCOL
+        last["content"] += "\n" + PROTOCOL + hint
     return teacher
 
 
@@ -451,7 +547,7 @@ def split_reflection(msg: dict) -> dict:
     match = _REFLECTION.match(content)
     if not match:
         return msg
-    return {**msg, "reasoning_content": match.group(1).strip(),
+    return {**msg, "reasoning_content": clean_thought(match.group(1)),
             "content": strip_stray_quote(content[match.end():]) or None}
 
 
@@ -465,17 +561,24 @@ async def teacher_call(chat, teacher: list[dict], usage: Counter, tools=None,
     refaire n'y change rien. Après un outil, on ouvre donc soi-même la réponse par
     <reflexion> (24 fois sur 24). Pas au premier appel : Gemma ne se tait plus alors
     qu'une fois sur 6, contre 6 sur 6 sans préremplissage.
+    Après sa réflexion, Gemma écrit aussi l'appel d'outil en texte au lieu de l'émettre
+    (« call:set_mood{…} », 6 appels sur 16) : la reprise vaut pour ce cas aussi, et une
+    fois pour une réponse qui s'ouvre par « C'est » (cf. _TIC_OPENING).
     ponytail: REFLECTION_TRIES fixe ; un plafond de dépense par tour si le taux de reprise grimpe.
     """
     for attempt in range(REFLECTION_TRIES):
         raw, finish, used = await chat(teacher, tools=tools, prefill="<reflexion>\n" if after_tool else None)
         usage.update(used)
-        if finish == "length" or _REFLECTION.match(raw.get("content") or ""):
+        content = raw.get("content") or ""
+        match = _REFLECTION.match(content)
+        said = content[match.end():] if match else ""
+        if finish == "length" or (match and not TOOL_AS_TEXT.search(said)
+                                  and not (attempt == 0 and _TIC_OPENING.match(said))):
             break
     return raw, finish, attempt
 
 
-async def aletheia_turn(chat, conv: Conversation, prompt: str, rng: random.Random) -> dict:
+async def aletheia_turn(chat, conv: Conversation, prompt: str, rng: random.Random, hint: str = "") -> dict:
     """Un tour de run_turn (lobe_frontal/main.py), du contexte à l'écriture en base."""
     ts = conv.clock
     now_ms = int((ts + timedelta(seconds=1)).timestamp() * 1000)
@@ -488,7 +591,7 @@ async def aletheia_turn(chat, conv: Conversation, prompt: str, rng: random.Rando
     sample = {"kind": "turn", "messages": messages, "tools": conv.pb.tools_schema,
               "context": {"mood": conv.pb.mood is not None, "recall": bool(rag),
                           "vision": "<vision" in json.dumps(messages[-1], ensure_ascii=False)}}
-    teacher = with_protocol(messages)
+    teacher = with_protocol(messages, hint)
     conv.rows.append({"role": "user", "content": prompt, "ts": ts})
 
     completion, rejects, usage = [], [], Counter()
@@ -671,7 +774,9 @@ async def run_conversation(chat, conv: Conversation, cfg: dict, rng: random.Rand
             # Un souvenir qui existe : get_from_memory a quelque chose à trouver.
             target = rng.choice(conv.memory.texts)
             intent = intent.format(memory=target)
-        conv.target = target
+        conv.target = target if rng.random() < TARGET_FOUND else None
+        if key == "emotion":
+            intent = intent.format(kind=rng.choice(EMOTION_KINDS))
         if key == "nouveau":
             name = rng.choice(cfg["unknown_names"])
             if all(p["display_name"] != name for p in conv.participants):
@@ -698,16 +803,11 @@ async def run_conversation(chat, conv: Conversation, cfg: dict, rng: random.Rand
                 conv.advance(rng.uniform(2, 20))
             conv.transcript.append(f"{human['persona']['display_name']}"
                                    f"{' (vocal)' if human['voice'] else ''}: {human['text']}")
-        sample = await aletheia_turn(chat, conv, format_prompt(conv, humans[-1]), rng)
-        if key == "silence" and sample["outcome"] != "silent":
-            # MEMORY.md : un ordre explicite de se taire appelle stay_silent. Sans
-            # protocole, Gemma répondait « je me tais » en parlant (7 fois sur 8) :
-            # sans ce rejet, l'élève apprendrait à ne jamais se taire.
-            sample["rejects"] = sorted(set(sample["rejects"]) | {"silence_ignored"})
-        if key == "souvenir" and memory_not_searched(sample, target):
-            # Le protocole : un souvenir absent de <recall> se cherche. Sans ce rejet, 6
-            # tours « souvenir » sur 19 apprenaient à improviser une réponse.
-            sample["rejects"] = sorted(set(sample["rejects"]) | {"memory_not_searched"})
+        hint = INTENT_HINTS.get(key, "")
+        if key == "entre_eux" and any(_ADDRESSED.search(h["text"]) for h in humans):
+            hint = ""    # le simulateur l'a nommée quand même : elle peut répondre
+        sample = await aletheia_turn(chat, conv, format_prompt(conv, humans[-1]), rng, hint=hint)
+        sample["rejects"] = sorted(set(sample["rejects"]) | intent_rejects(key, sample, target))
         emit(sample, meta(round=round_, intent=key, burst=len(humans), memory_target=target))
         if {"protocol_leak", "glitch", "tool_as_text"} & set(sample["rejects"]):
             # Le texte fautif est déjà dans l'historique : les tours suivants le verraient,
@@ -756,7 +856,7 @@ def saved_memories() -> list[str]:
     """Les save_to_memory des runs précédents : ce qu'Aletheia a déjà noté elle-même."""
     texts = []
     for path in glob.glob(os.path.join(OUT_DIR, "**", "*.jsonl"), recursive=True):
-        if os.path.basename(path) == "sft.jsonl":
+        if os.path.basename(path).startswith("sft"):   # les exports : sft.jsonl, sft-v2.jsonl
             continue
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -821,7 +921,8 @@ def real_prefix(rows: list[dict], rng: random.Random, start: datetime) -> list[d
         return []
     shift = (start - timedelta(minutes=rng.randint(10, 3 * 24 * 60))
              - datetime.fromisoformat(chunk[-1]["timestamp"]))
-    return [{"role": r["role"], "content": r["content"],
+    # L'ancienne Aletheia mettait des emojis, que PERSONA.md interdit maintenant.
+    return [{"role": r["role"], "content": _EMOJI.sub("", r["content"]).strip() if r["role"] == "assistant" else r["content"],
              "ts": datetime.fromisoformat(r["timestamp"]) + shift} for r in chunk]
 
 

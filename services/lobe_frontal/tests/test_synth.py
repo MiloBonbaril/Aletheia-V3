@@ -103,6 +103,12 @@ def test_checks():
     assert "glitch" in thought_problems(THOUGHT + " ta针对")
 
 
+def test_a_broken_or_spammed_mention_is_rejected():
+    assert text_problems("Demande à <@293414992663805952> !") == []
+    assert "bad_mention" in text_problems("]<@293414992663805952] t'es là ?")
+    assert "bad_mention" in text_problems("<@1> <@2> <@3> réveillez-vous")
+
+
 def test_the_thought_follows_the_protocol():
     assert thought_problems(THOUGHT) == []
     assert thought_problems("") == ["no_thought"]
@@ -232,8 +238,103 @@ def test_the_stray_quote_after_the_reflection_is_dropped():
     assert [m["content"] for m in to_sft(old_run)["messages"]] == ["> cite", "Coucou.", "Salut."]
 
 
+def test_a_tool_call_written_as_text_is_asked_again():
+    conv = conversation()
+    sample, seen = turn(conv, "Milo said: t'es la meilleure",
+                        ('call:set_mood{emotion:<|"|>touchée<|"|>}\n\nMerci.', None),
+                        (None, [call("set_mood", emotion="touchée", intensity=0.9)]),
+                        ("Merci, ça me touche.", None))
+    assert sample["retries"] == 1 and sample["rejects"] == []
+    assert conv.mood.emotion == "touchée"
+
+
+def test_a_turn_that_skips_what_its_intent_exercises_is_rejected():
+    from synth.main import intent_rejects
+    replied, _ = turn(conversation(), "Milo said: t'es la meilleure", ("Je sais.", None))
+    assert intent_rejects("emotion", replied, None) == {"mood_not_set"}
+    assert intent_rejects("silence", replied, None) == {"silence_ignored"}
+    assert intent_rejects("suite", replied, None) == set()
+    moved, _ = turn(conversation(), "Milo said: t'es la meilleure",
+                    (None, [call("set_mood", emotion="touchée", intensity=0.9)]), ("Merci.", None))
+    assert intent_rejects("emotion", moved, None) == set()
+
+
 def test_mood_decays_like_limbic():
     conv = conversation()
     turn(conv, "Milo said: bravo", (None, [call("set_mood", emotion="fière", intensity=0.1)]), ("Merci.", None))
     conv.advance(60)   # deux ticks de 30 s à 0,05 : retour au neutre
     assert conv.mood.emotion == "neutral" and conv.mood.intensity == 0.0
+
+
+def test_humans_talking_to_each_other_call_for_silence():
+    from synth.main import intent_rejects
+    replied, _ = turn(conversation(), "Beyou said: t'as vu le match hier Taiko ?", ("Quel match ?", None))
+    assert intent_rejects("entre_eux", replied, None) == {"silence_ignored"}
+    silent, _ = turn(conversation(), "Beyou said: t'as vu le match hier Taiko ?", (None, [call("stay_silent")]))
+    assert intent_rejects("entre_eux", silent, None) == set()
+    # Nommée ou mentionnée, elle peut répondre.
+    named, _ = turn(conversation(), f"Beyou said: <@{ALETHEIA_ID}> elle en pense quoi ?", ("Du bien.", None))
+    assert intent_rejects("entre_eux", named, None) == set()
+
+
+def test_a_thought_that_plans_silence_then_speaks_is_rejected():
+    from synth.main import intent_rejects, plans_silence
+    spoke = {"messages": [{"role": "user", "content": "Milo said: chut"}], "outcome": "reply", "completion": [
+        {"role": "assistant", "reasoning_content": "Je sais que Milo parle.\nJe vais rester discrète.",
+         "content": "D'accord, je me fais discrète."}]}
+    assert plans_silence(spoke["completion"]) and intent_rejects("suite", spoke, None) == {"silence_ignored"}
+    assert intent_rejects("suite", {**spoke, "outcome": "silent"}, None) == set()
+    # « me taire » hors de la démarche ne compte pas : mesuré, c'était surtout des faux positifs.
+    teased = [{"role": "assistant", "content": "Jamais.",
+               "reasoning_content": "On me demande si je vais enfin me taire.\nJe vais répondre avec répartie."}]
+    assert not plans_silence(teased)
+
+
+def test_the_thought_loses_its_list_markers():
+    from synth.main import clean_thought, split_reflection
+    from synth.to_sft import to_sft
+    numbered = "1. Je sais que c'est un test.\n2. On me demande de répondre.\n- Je vais répondre court."
+    plain = "Je sais que c'est un test.\nOn me demande de répondre.\nJe vais répondre court."
+    assert clean_thought(numbered) == plain
+    assert split_reflection({"role": "assistant", "content": f"<reflexion>{numbered}</reflexion>Ok."})["reasoning_content"] == plain
+    assert thought_problems(plain) == []
+    old_run = {"rejects": [], "scenario": {"conversation_id": "c1"}, "messages": [{"role": "user", "content": "salut"}],
+               "completion": [{"role": "assistant", "content": "Salut.", "reasoning_content": numbered}]}
+    assert to_sft(old_run)["messages"][-1]["reasoning_content"] == plain
+    # Et le schéma de stay_silent d'avant le correctif retrouve celui de la production.
+    misplaced = [{"type": "function", "function": {"name": "stay_silent", "description": "d",
+                                                   "parameters": {"type": "object", "properties": {}}, "required": []}}]
+    fixed = to_sft({**old_run, "tools": misplaced})["tools"]
+    assert fixed == [
+        {"type": "function", "function": {"name": "stay_silent", "description": "d",
+                                          "parameters": {"type": "object", "properties": {}, "required": []}}}]
+
+
+def test_an_answer_that_opens_with_the_tic_is_asked_again_once():
+    sample, _ = turn(conversation(), "Milo said: ok ?", ("C'est noté.", None), ("Noté.", None))
+    assert sample["retries"] == 1 and sample["completion"][-1]["content"] == "Noté."
+    stubborn, _ = turn(conversation(), "Milo said: ok ?", ("C'est noté.", None))
+    assert stubborn["retries"] == 1 and stubborn["rejects"] == []
+
+
+def test_the_emotion_hint_reaches_the_teacher_only():
+    from synth.main import INTENT_HINTS
+    EMOTION_HINT = INTENT_HINTS["emotion"]
+    chat, seen = fake_teacher(("Merci.", None))
+    sample = asyncio.run(aletheia_turn(chat, conversation(), "Milo said: t'es la meilleure",
+                                       random.Random(0), hint=EMOTION_HINT))
+    assert EMOTION_HINT.strip() in json.dumps(seen[0], ensure_ascii=False)
+    assert EMOTION_HINT.strip() not in json.dumps(sample["messages"], ensure_ascii=False)
+
+
+def test_the_real_history_loses_aletheia_s_old_emojis():
+    from synth.main import real_prefix
+    rows = [{"role": "user", "content": "Milo said: salut 🚀", "timestamp": "2026-06-01T10:00:00"},
+            {"role": "assistant", "content": "Top, on y va ! 🚀", "timestamp": "2026-06-01T10:00:05"}] * 4
+
+    class Rng(random.Random):
+        def random(self):
+            return 0.9   # garde un préfixe
+    prefix = real_prefix(rows, Rng(0), T0)
+    assert prefix and all("🚀" not in r["content"] for r in prefix if r["role"] == "assistant")
+    assert any("🚀" in r["content"] for r in prefix if r["role"] == "user")

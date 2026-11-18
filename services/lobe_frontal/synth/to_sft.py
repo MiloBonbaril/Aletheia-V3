@@ -19,13 +19,21 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from synth.main import GLITCH, TOOL_AS_TEXT, leaks_protocol, strip_stray_quote
+from synth.main import (BAD_MENTION, GLITCH, TOOL_AS_TEXT, clean_thought, intent_rejects, leaks_protocol,
+                        strip_stray_quote)
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 
 
 def to_sft(record: dict) -> dict | None:
-    if record["rejects"]:
+    # Les rejets par intention se recalculent : un run d'avant mood_not_set garde sinon
+    # 134 tours « émotion » acceptés sans set_mood, qui apprendraient l'inverse des nouveaux.
+    scenario = record.get("scenario", {})
+    # Les runs d'avant clean_thought gardent les réflexions numérotées (« 1. Je sais que… »).
+    record = {**record, "completion": [{**m, "reasoning_content": clean_thought(m["reasoning_content"])}
+                                       if m.get("reasoning_content") else m for m in record["completion"]]}
+    if record["rejects"] or (record.get("kind") == "turn" and intent_rejects(
+            scenario.get("intent", ""), record, scenario.get("memory_target"))):
         return None
     completion = []
     for msg in record["completion"]:
@@ -40,13 +48,17 @@ def to_sft(record: dict) -> dict | None:
                 for m in record["messages"] + completion]
     sample = {"messages": messages}
     if record.get("tools"):
-        sample["tools"] = record["tools"]
+        # Les runs d'avant le correctif de tools_schema posent "required" à côté de
+        # "parameters" (stay_silent) : llama-server le retire, l'élève ne le verrait qu'ici.
+        sample["tools"] = [{**t, "function": {**{k: v for k, v in t["function"].items() if k != "required"},
+                                              "parameters": {**t["function"]["parameters"], "required": t["function"]["required"]}}}
+                           if "required" in t["function"] else t for t in record["tools"]]
     sample["conv_id"] = record["scenario"]["conversation_id"]
     # Dernier filet, contexte compris (les tours rejetés restent dans l'historique) :
     # une trace du protocole, un jeton parasite, un outil écrit en texte.
     spoken = "\n".join(m["content"] for m in messages if m["role"] == "assistant" and isinstance(m["content"], str))
     dump = json.dumps(sample, ensure_ascii=False)
-    if leaks_protocol(dump) or GLITCH.search(dump) or TOOL_AS_TEXT.search(spoken):
+    if leaks_protocol(dump) or GLITCH.search(dump) or TOOL_AS_TEXT.search(spoken) or BAD_MENTION.search(spoken):
         return None
     return sample
 
@@ -55,7 +67,7 @@ def main() -> None:
     paths = sys.argv[1:] or sorted(glob.glob(os.path.join(OUT_DIR, "*.jsonl")))
     kept = total = 0
     for path in paths:
-        if os.path.basename(path) == "sft.jsonl":
+        if os.path.basename(path).startswith("sft"):   # les exports : sft.jsonl, sft-v2.jsonl
             continue
         with open(path, encoding="utf-8") as f:
             for line in f:

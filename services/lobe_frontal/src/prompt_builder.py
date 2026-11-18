@@ -95,8 +95,7 @@ class PromptBuilder:
                 "function": {
                     "name": "stay_silent",
                     "description": "Active le mode silence si tu décides de ne pas répondre.",
-                    "parameters": {"type": "object", "properties": {}},
-                    "required": []
+                    "parameters": {"type": "object", "properties": {}, "required": []}
                 }
             },
             {
