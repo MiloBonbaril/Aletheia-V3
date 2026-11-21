@@ -67,6 +67,31 @@ NATS `max_payload` limit.
   }
   ```
 
+#### `io.user.voice.activity`
+
+A speaker takes the floor or gives it back. `io_oreilles` publishes it from the VAD of each speaker,
+with the local microphone and with `--discord`. The `lobe_frontal` keeps the set of the speakers
+that speak: the floor is free when the set is empty.
+
+- **Payload (JSON):**
+  ```json
+  {
+    "speaker_id": "123456789012345678 (optional, absent for the local microphone)",
+    "speaker": "Milo (optional, absent for the local microphone)",
+    "speaking": true
+  }
+  ```
+- `speaking: true` comes when the segment holds 8 frames of speech (approximately 250 ms). Thus a
+  cough or a short noise sends no event.
+- `speaking: false` comes when the segment ends, **after** the `io.user.speak` of that segment (or
+  `io.user.speak.raw`), on the same NATS connection. A confirmed segment always gets its end, also
+  when Whisper returns no text, and also when the speaker left the channel.
+- A long segment that `io_oreilles` cuts at 25 s sends no new event. The speaker keeps the floor.
+- `speaker_id` is the Discord user ID. It identifies the speaker: the lobe_frontal uses it as the
+  key, thus a change of display name in the middle of a sentence does not keep the floor busy.
+- `speaker` is the Discord display name, as in `io.user.speak`. It gives context only, for example
+  in the logs.
+
 ---
 
 ### 🎙️ Discord audio (io_discord → io_oreilles)
@@ -141,8 +166,17 @@ The inference order. The cortex sends it to the lobe_frontal.
     that waited is dropped, because a turn ran during the wait.
   - It builds the context of the answered message again (see `hippocampe.context.build`), because
     the context from its arrival time does not hold the last answer and the skipped messages.
-  Two guards release the queue: 1 s after the last fragment if no `io.voice.speak.start` came (no
-  TTS runs), and 60 s after it in all cases.
+  The voice is active when an `io.voice.speak.start` or `.end` came in the last 10 minutes (the
+  same rule as `io_yeux`). With an active voice, the queue waits for the end of the speech, also
+  when the first `io.voice.speak.start` comes late. Two guards release the queue: 1 s after the
+  last fragment if the voice is not active and no `io.voice.speak.start` came, and 60 s after it
+  in all cases.
+- **The floor.** When the queue is free and a message waits, the lobe_frontal waits for the free
+  floor (`io.user.voice.activity`) before it takes the waiting messages. When the floor becomes
+  free, it waits 200 ms more, for the message of the last speaker to come through the cortex.
+  After `FLOOR_MAX_WAIT_SECONDS` (15 s by default), Aletheia speaks, and the lobe_frontal forgets
+  the speakers that it held. This applies to every waiting message: voice, text and proactive.
+  Nobody interrupts Aletheia while she speaks.
 
 #### `hippocampe.context.build`
 
@@ -531,10 +565,10 @@ restart of the cortex clears them.
 | Service | Subscribes to | Publishes on |
 |---|---|---|
 | cortex | `io.user.msg.text`, `io.user.speak`, `io.user.speak.raw`, `limbic.proactive.trigger`, `lobe.fragment_stream` | `cortex.prompt`, `hippocampe.context.build`, `cortex.interaction.started` |
-| lobe_frontal | `cortex.prompt`, `hippocampe.context.ready`, `limbic.mood.update`, `io.vision.state`, `io.voice.speak.start`, `io.voice.speak.end`, `lobe.topic.generate` (reply) | `lobe.fragment_stream`, `hippocampe.history.add` (also request), `hippocampe.context.build` (a message that waited), `limbic.mood.set`, `hippocampe.rag.query` (request), `hippocampe.rag.add` (request) |
+| lobe_frontal | `cortex.prompt`, `hippocampe.context.ready`, `limbic.mood.update`, `io.vision.state`, `io.voice.speak.start`, `io.voice.speak.end`, `io.user.voice.activity`, `lobe.topic.generate` (reply) | `lobe.fragment_stream`, `hippocampe.history.add` (also request), `hippocampe.context.build` (a message that waited), `limbic.mood.set`, `hippocampe.rag.query` (request), `hippocampe.rag.add` (request) |
 | hippocampe | `hippocampe.context.build`, `hippocampe.history.add` (optional reply), `hippocampe.rag.query`, `hippocampe.rag.add` | `hippocampe.context.ready` |
 | limbic | `limbic.mood.set`, `cortex.interaction.started`, `io.presence.discord_voice` | `limbic.mood.update`, `limbic.proactive.trigger`, `lobe.topic.generate` (request) |
-| io_oreilles | `io.discord.voice.frame` (`--discord` only) | `io.user.speak`, `io.user.speak.raw` |
+| io_oreilles | `io.discord.voice.frame` (`--discord` only) | `io.user.speak`, `io.user.speak.raw`, `io.user.voice.activity` |
 | io_voix | `lobe.fragment_stream` | `io.voice.speak.audio`; `io.voice.speak.start`, `io.voice.speak.end` (local playback only) |
 | terminal | `lobe.fragment_stream` | `io.user.msg.text` |
 | io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`, `io.voice.speak.start`, `io.voice.speak.end` |

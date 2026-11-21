@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.turn_queue import is_for_turn, take_latest
+from src.turn_queue import apply_voice_activity, is_for_turn, take_latest, voice_active
 
 
 def msg(name, source=None, stale=False):
@@ -44,3 +44,36 @@ def test_speech_events_match_the_turn_by_correlation_id():
     assert is_for_turn({"correlation_id": "c1"}, "c1")
     assert not is_for_turn({"correlation_id": "c0"}, "c1")
     assert is_for_turn({}, "c1")
+
+
+def test_the_voice_is_active_for_ten_minutes_after_a_speech_event():
+    assert not voice_active(None, 1000.0)
+    assert voice_active(1000.0, 1000.0)
+    assert voice_active(1000.0, 1600.0)
+    assert not voice_active(1000.0, 1600.1)
+
+
+def test_the_floor_is_free_only_when_every_speaker_stopped():
+    floor: set[str] = set()
+    apply_voice_activity(floor, {"speaker_id": "1", "speaker": "Feekgun", "speaking": True})
+    apply_voice_activity(floor, {"speaker_id": "2", "speaker": "Vegeta", "speaking": True})
+    apply_voice_activity(floor, {"speaker_id": "1", "speaker": "Feekgun", "speaking": False})
+    assert floor == {"2"}
+    apply_voice_activity(floor, {"speaker_id": "2", "speaker": "Vegeta", "speaking": False})
+    apply_voice_activity(floor, {"speaker_id": "2", "speaker": "Vegeta", "speaking": False})  # fin en double
+    assert floor == set()
+
+
+def test_a_new_nickname_mid_sentence_keeps_the_same_speaker():
+    floor: set[str] = set()
+    apply_voice_activity(floor, {"speaker_id": "1", "speaker": "Feekgun", "speaking": True})
+    apply_voice_activity(floor, {"speaker_id": "1", "speaker": "Feek", "speaking": False})
+    assert floor == set()
+
+
+def test_the_local_microphone_counts_as_one_speaker():
+    floor: set[str] = set()
+    apply_voice_activity(floor, {"speaking": True})
+    assert floor == {""}
+    apply_voice_activity(floor, {"speaking": False})
+    assert floor == set()

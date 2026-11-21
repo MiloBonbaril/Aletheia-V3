@@ -24,6 +24,23 @@ One period of continuous speech of one speaker, between two silences. The VAD in
 delimits it, and the STT transcribes it.
 _Avoid_: utterance, clip
 
+**Active voice**:
+The state where a speaker plays the voice of Aletheia. The voice is active when an
+`io.voice.speak.start` or `io.voice.speak.end` came in the last 10 minutes. `lobe_frontal` and
+`io_yeux` use the same rule. With an active voice, a turn ends only when Aletheia stops speaking.
+_Avoid_: TTS on, voice mode
+
+**Floor**:
+The right to speak in the voice conversation. The floor is free when no speaker is in a segment.
+Aletheia takes the floor only when it is free: she waits before she generates an answer, for a
+maximum time. Nobody takes the floor from Aletheia while she speaks: there is no interruption.
+_Avoid_: turn, talk slot, silence
+
+**Skipped message**:
+A user message that waited while Aletheia was busy, and that is not the last one. It goes into the
+history with no answer. Only the last waiting user message gets an answer.
+_Avoid_: dropped message, ignored message
+
 **Passive recall**:
 The RAG search that the `hippocampe` service starts automatically for each user message. The result
 goes into the `<recall>` section of the system prompt. It is different from the active search, which

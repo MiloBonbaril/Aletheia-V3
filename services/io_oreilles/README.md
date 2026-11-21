@@ -16,6 +16,9 @@ written in **Rust**.
 - **Attack of the first word:** the segment starts 224 ms before the decision of the VAD, so the
   start of the first word is not lost.
 - **Event output:** it publishes the text on `io.user.speak` at the end of each turn of speech.
+  It also publishes `io.user.voice.activity`: `speaking: true` when a turn holds 8 frames of
+  speech, and `speaking: false` after the `io.user.speak` of that turn. The `lobe_frontal` uses it
+  to wait for the free floor.
 - **Discord mode:** with the `--discord` flag, it processes the audio of a Discord voice channel. It
   runs an independent VAD pipeline for each speaker. Thus a person who stops to speak does not cut
   the sentence of a different person. The events carry the name of the speaker. When no frame
@@ -283,5 +286,5 @@ toolchain.
 ## 🔌 NATS interface
 
 - **Publishes on:** `io.user.speak` (transcript, with `speaker` in the Discord mode),
-  `io.user.speak.raw` (only with `RAW_AUDIO`)
+  `io.user.speak.raw` (only with `RAW_AUDIO`), `io.user.voice.activity` (start and end of each turn of speech)
 - **Subscribes to:** `io.discord.voice.frame` (only with `--discord`)

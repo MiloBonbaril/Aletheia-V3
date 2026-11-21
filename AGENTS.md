@@ -220,7 +220,8 @@ Each service reads its own `.env` file. The Python services use `python-dotenv`.
 **Important:** only `benchmark`, `io_oreilles`, `io_yeux` and `limbic` read `NATS_URL`. The other services have
 the address `nats://localhost:4222` in their source code.
 
-- lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`.
+- lobe_frontal: `LLM_MODEL`, `TEMPERATURE`, `TOP_P`, `REASONING_EFFORT`, `MAX_CONCURRENT_INFERENCE`,
+  `FLOOR_MAX_WAIT_SECONDS` (15 s by default: the maximum wait for the free floor).
   Keep `MAX_CONCURRENT_INFERENCE` at 1: llama-server runs with `--parallel 1`, and the value 2 lets
   a `lobe.topic.generate` run during a turn.
 - hippocampe: `POSTGRES_URL`, `QDRANT_URL`, `QDRANT_PORT`, `RAG_SCORE_THRESHOLD`. The

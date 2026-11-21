@@ -66,15 +66,17 @@ impl SpeakerPipeline {
         })
     }
 
-    /// Feed a chunk of mono 48kHz samples; returns any audio chunks (16kHz f32) that came
-    /// out as a result (normally 0 or 1 per call). The flag is `true` when the speaker has
-    /// stopped, `false` for a forced cut in the middle of a long turn.
+    /// Feed a chunk of mono 48kHz samples. Returns `true` when the speech of this speaker
+    /// became confirmed during the call (see `FrameOutcome::SpeechConfirmed`), and any audio
+    /// chunks (16kHz f32) that came out (normally 0 or 1 per call). The flag of a chunk is
+    /// `true` when the speaker has stopped, `false` for a forced cut in the middle of a long turn.
     pub fn push_mono_48k(
         &mut self,
         session: &mut Session,
         samples: &[f32],
-    ) -> Vec<(Vec<f32>, bool)> {
+    ) -> (bool, Vec<(Vec<f32>, bool)>) {
         self.internal_buf.extend_from_slice(samples);
+        let mut confirmed = false;
         let mut ended = Vec::new();
 
         let mut required_in = self.resampler.input_frames_next();
@@ -95,6 +97,7 @@ impl SpeakerPipeline {
             let frame: Vec<f32> = self.vad_buf.drain(0..512).collect();
             match session.infer_chunk(&mut self.stream_state, &frame) {
                 Ok(prob) => match self.segmenter.push_frame(&frame, prob) {
+                    FrameOutcome::SpeechConfirmed => confirmed = true,
                     FrameOutcome::SpeechEnded(segment) => ended.push((segment, true)),
                     FrameOutcome::SpeechContinues(chunk) => ended.push((chunk, false)),
                     FrameOutcome::SpeechDiscarded { speech_frames } => tracing::info!(
@@ -108,7 +111,7 @@ impl SpeakerPipeline {
             }
         }
 
-        ended
+        (confirmed, ended)
     }
 
     /// Closes the open turn of a speaker whose frames stopped: the member left the channel, or

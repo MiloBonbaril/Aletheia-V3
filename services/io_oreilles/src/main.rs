@@ -22,6 +22,28 @@ struct TranscriptionEvent {
     speaker: Option<String>,
 }
 
+/// `io.user.voice.activity` : un locuteur prend la parole ou la rend (voir NATS_TOPICS.md).
+/// Un locuteur Discord : son identifiant (stable, la clé) et son nom affiché (le contexte, qui
+/// peut changer). `None` pour le micro local, qui n'a pas d'identité.
+type Speaker = Option<(String, String)>;
+
+#[derive(Serialize)]
+struct VoiceActivityEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker: Option<String>,
+    speaking: bool,
+}
+
+/// Le message (sujet, payload) d'un changement de parole, prêt pour la boucle de publication.
+fn voice_activity(speaker: Speaker, speaking: bool) -> (&'static str, Vec<u8>) {
+    let (speaker_id, speaker) = speaker.unzip();
+    let event = VoiceActivityEvent { speaker_id, speaker, speaking };
+    // ponytail: un struct de deux champs simples ne peut pas échouer à la sérialisation.
+    ("io.user.voice.activity", serde_json::to_vec(&event).expect("VoiceActivityEvent"))
+}
+
 /// Le mode brut (audio non transcrit sur `io.user.speak.raw`) ne dépend que de
 /// `RAW_AUDIO`. `--discord` ne l'implique plus : l'audio brut d'un salon vocal
 /// finissait dans l'historique Postgres et faisait dépasser le `max_payload`
@@ -87,6 +109,15 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json, r#"{"text":"bonjour"}"#);
+    }
+
+    #[test]
+    fn voice_activity_carries_the_id_and_the_name() {
+        let (subject, payload) = voice_activity(Some(("42".to_string(), "Milo".to_string())), true);
+        assert_eq!(subject, "io.user.voice.activity");
+        assert_eq!(payload, br#"{"speaker_id":"42","speaker":"Milo","speaking":true}"#);
+        let (_, payload) = voice_activity(None, false);
+        assert_eq!(payload, br#"{"speaking":false}"#);
     }
 
     #[test]
@@ -233,7 +264,13 @@ async fn main() -> Result<()> {
     // Le booléen dit si ce morceau ferme le tour de parole. Un morceau non final vient d'une
     // coupe forcée : on le transcrit tout de suite, mais on ne publie rien tant que la personne
     // parle encore — sinon Aletheia répondrait à une demi-phrase et lui couperait la parole.
-    let (tx_speech, mut rx_speech) = mpsc::channel::<(Vec<f32>, Option<String>, bool)>(32);
+    let (tx_speech, mut rx_speech) = mpsc::channel::<(Vec<f32>, Speaker, bool)>(32);
+    // Tout ce que le service publie passe par cette file et une seule boucle : NATS garde
+    // l'ordre d'un même client, donc la fin de parole (`speaking: false`) part toujours après
+    // le `io.user.speak` du même tour. Le lobe_frontal compte là-dessus pour trouver le
+    // dernier message dans son lot.
+    let (tx_out, mut rx_out) = mpsc::unbounded_channel::<(&'static str, Vec<u8>)>();
+    let tx_out_vad = tx_out.clone();
 
     // Le flux cpal vit hors du bloc : le détruire à la fin du bloc coupe la capture du micro.
     let mut _mic_stream = None;
@@ -403,6 +440,9 @@ async fn main() -> Result<()> {
                         if prob > diag_max_prob { diag_max_prob = prob; }
                         match segmenter.push_frame(&frame, prob) {
                             FrameOutcome::SpeechStarted => info!("Speech started (prob: {:.2})", prob),
+                            FrameOutcome::SpeechConfirmed => {
+                                let _ = tx_out_vad.send(voice_activity(None, true));
+                            }
                             FrameOutcome::SpeechEnded(segment) => {
                                 info!("Speech ended. Captured {} samples.", segment.len());
                                 if let Err(e) = tx_speech.blocking_send((segment, None, true)) {
@@ -508,13 +548,13 @@ async fn main() -> Result<()> {
             let mut pipelines: std::collections::HashMap<String, (String, SpeakerPipeline, Instant)> =
                 std::collections::HashMap::new();
 
-            let send = |chunk: Vec<f32>, name: &str, is_final: bool| {
+            let send = |chunk: Vec<f32>, id: &str, name: &str, is_final: bool| {
                 if is_final {
                     info!("Speech ended for {}. Captured {} samples.", name, chunk.len());
                 } else {
                     info!("Speech still running for {}. Forced cut at {} samples.", name, chunk.len());
                 }
-                if let Err(e) = tx_speech_discord.blocking_send((chunk, Some(name.to_string()), is_final)) {
+                if let Err(e) = tx_speech_discord.blocking_send((chunk, Some((id.to_string(), name.to_string())), is_final)) {
                     fatal("le fil STT ne reçoit plus les segments Discord", e);
                 }
             };
@@ -522,7 +562,7 @@ async fn main() -> Result<()> {
             loop {
                 match rx_frame.recv_timeout(SPEAKER_GONE_AFTER) {
                     Ok((speaker_id, speaker_name, mono_48k)) => {
-                        let (name, pipeline, seen) = match pipelines.entry(speaker_id) {
+                        let (name, pipeline, seen) = match pipelines.entry(speaker_id.clone()) {
                             Entry::Occupied(e) => e.into_mut(),
                             Entry::Vacant(e) => match SpeakerPipeline::new() {
                                 Ok(p) => e.insert((speaker_name.clone(), p, Instant::now())),
@@ -532,8 +572,12 @@ async fn main() -> Result<()> {
                         *name = speaker_name;
                         *seen = Instant::now();
 
-                        for (chunk, is_final) in pipeline.push_mono_48k(&mut session, &mono_48k) {
-                            send(chunk, name, is_final);
+                        let (confirmed, chunks) = pipeline.push_mono_48k(&mut session, &mono_48k);
+                        if confirmed {
+                            let _ = tx_out_vad.send(voice_activity(Some((speaker_id.clone(), name.clone())), true));
+                        }
+                        for (chunk, is_final) in chunks {
+                            send(chunk, &speaker_id, name, is_final);
                         }
                     }
                     Err(RecvTimeoutError::Timeout) => {}
@@ -551,7 +595,7 @@ async fn main() -> Result<()> {
                     if let Some((name, mut pipeline, _)) = pipelines.remove(&id) {
                         info!("No frame from {} for {:?}: the speaker left.", name, SPEAKER_GONE_AFTER);
                         if let Some(segment) = pipeline.flush() {
-                            send(segment, &name, true);
+                            send(segment, &id, &name, true);
                         }
                     }
                 }
@@ -566,33 +610,36 @@ async fn main() -> Result<()> {
         // ponytail: le mode brut ignore le drapeau et publie chaque morceau. Le plafond de 25 s
         // lui fait du bien : il borne le payload base64, qui dépassait le `max_payload` NATS sur
         // les longs tours de parole. Un tour coupé donne plusieurs messages, pas un tronqué.
-        while let Some((speech, speaker, _is_final)) = rx_speech.recv().await {
-            info!("Received speech chunk of len {} (raw mode)", speech.len());
-            let start = std::time::Instant::now();
-            let wav_data = create_wav_data(&speech);
-            use base64::Engine;
-            let b64_wav = base64::engine::general_purpose::STANDARD.encode(&wav_data);
+        let tx_out_raw = tx_out.clone();
+        tokio::spawn(async move {
+            while let Some((speech, speaker, is_final)) = rx_speech.recv().await {
+                info!("Received speech chunk of len {} (raw mode)", speech.len());
+                let start = std::time::Instant::now();
+                let wav_data = create_wav_data(&speech);
+                use base64::Engine;
+                let b64_wav = base64::engine::general_purpose::STANDARD.encode(&wav_data);
 
-            let mut event = serde_json::json!({
-                "audio": b64_wav,
-                "format": "wav"
-            });
-            if let Some(name) = &speaker {
-                event["speaker"] = serde_json::json!(name);
-            }
-            match serde_json::to_vec(&event) {
-                Ok(payload) => {
-                    if let Err(e) = client.publish("io.user.speak.raw".to_string(), payload.into()).await {
-                        error!("Failed to publish raw audio: {:?}", e);
-                    } else {
-                        info!("Published raw audio to NATS in {:?}", start.elapsed());
+                let mut event = serde_json::json!({
+                    "audio": b64_wav,
+                    "format": "wav"
+                });
+                if let Some((_, name)) = &speaker {
+                    event["speaker"] = serde_json::json!(name);
+                }
+                match serde_json::to_vec(&event) {
+                    Ok(payload) => {
+                        let _ = tx_out_raw.send(("io.user.speak.raw", payload));
+                        info!("Raw audio ready in {:?}", start.elapsed());
+                    }
+                    Err(e) => {
+                        error!("Failed to serialize raw audio event: {:?}", e);
                     }
                 }
-                Err(e) => {
-                    error!("Failed to serialize raw audio event: {:?}", e);
+                if is_final {
+                    let _ = tx_out_raw.send(voice_activity(speaker, false));
                 }
             }
-        }
+        });
     } else {
         // 6. Thread 3 (STT) inside Tokio Runtime
         info!("Loading STT model...");
@@ -653,12 +700,13 @@ async fn main() -> Result<()> {
         // (une seule réplique CTranslate2 ; les segments d'un même tour restent ordonnés).
         // ponytail: thread simple plutôt que pool. Plafond assumé : un locuteur B attend la
         // fin de la transcription du locuteur A. Passer à N répliques si ça se voit.
-        let (tx_text, mut rx_text) = mpsc::channel::<(String, Option<String>)>(32);
+        let tx_out_stt = tx_out.clone();
         std::thread::spawn(move || {
             info!("STT ready (language: {}). Waiting for speech events...",
                 stt_language.as_deref().unwrap_or("auto-detect"));
-            // Texte des morceaux déjà transcrits d'un tour de parole en cours, par locuteur
-            // (clé `None` pour le micro local). On recolle et on publie une seule fois, quand
+            // Texte des morceaux déjà transcrits d'un tour de parole en cours, par identifiant de
+            // locuteur (clé `None` pour le micro local) : un changement de pseudo au milieu du
+            // tour ne coupe pas le texte en deux. On recolle et on publie une seule fois, quand
             // la personne se tait vraiment.
             // ponytail: pas de plafond sur le texte retenu. Un tour d'une heure fait ~60 Ko,
             // loin du `max_payload` NATS de 1 Mo. Le borner si un jour un flux ne se tait plus.
@@ -674,7 +722,7 @@ async fn main() -> Result<()> {
                         let text = result.join(" ").trim().to_string();
                         info!("Transcribed in {:?}: {}", start.elapsed(), text);
                         if !text.is_empty() {
-                            pending.entry(speaker.clone()).or_default().push(text);
+                            pending.entry(speaker.as_ref().map(|(id, _)| id.clone())).or_default().push(text);
                         }
                     }
                     Err(e) => {
@@ -688,26 +736,30 @@ async fn main() -> Result<()> {
                 if !is_final {
                     continue;
                 }
-                let full = pending.remove(&speaker).unwrap_or_default().join(" ");
-                if full.is_empty() {
-                    continue;
-                }
-                if let Err(e) = tx_text.blocking_send((full, speaker)) {
-                    fatal("la boucle de publication ne reçoit plus les transcriptions", e);
-                }
-            }
-        });
-
-        while let Some((text, speaker)) = rx_text.recv().await {
-            let event = TranscriptionEvent { text, speaker };
-            match serde_json::to_vec(&event) {
-                Ok(payload) => {
-                    if let Err(e) = client.publish("io.user.speak".to_string(), payload.into()).await {
-                        error!("Failed to publish transcription: {:?}", e);
+                let full = pending.remove(&speaker.as_ref().map(|(id, _)| id.clone())).unwrap_or_default().join(" ");
+                if !full.is_empty() {
+                    let event = TranscriptionEvent { text: full, speaker: speaker.as_ref().map(|(_, name)| name.clone()) };
+                    match serde_json::to_vec(&event) {
+                        Ok(payload) => {
+                            if tx_out_stt.send(("io.user.speak", payload)).is_err() {
+                                fatal("la boucle de publication ne reçoit plus les transcriptions", "canal fermé");
+                            }
+                        }
+                        Err(e) => error!("Failed to serialize transcription event: {:?}", e),
                     }
                 }
-                Err(e) => error!("Failed to serialize transcription event: {:?}", e),
+                // Toujours, même sans texte : le tour a été confirmé, donc le lobe_frontal
+                // attend cette fin pour reprendre la parole.
+                let _ = tx_out_stt.send(voice_activity(speaker, false));
             }
+        });
+    }
+
+    // Seuls les producteurs gardent la file ouverte : si tous meurent, la boucle s'arrête.
+    drop(tx_out);
+    while let Some((subject, payload)) = rx_out.recv().await {
+        if let Err(e) = client.publish(subject.to_string(), payload.into()).await {
+            error!("Failed to publish {}: {:?}", subject, e);
         }
     }
 

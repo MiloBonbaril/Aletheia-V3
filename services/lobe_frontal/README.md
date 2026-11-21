@@ -16,7 +16,11 @@ LLM and it structures the thought of the entity.
   the other messages to the history with no answer. For the answered message, it asks the
   hippocampe for the context again, because the context of its arrival time does not hold the last
   answer. A proactive prompt gives its place to a user message, and a proactive prompt that waited
-  is dropped. With no TTS, the queue opens 1 s after the last fragment; in all cases, 60 s after it.
+  is dropped. With an active voice (an `io.voice.speak.*` in the last 10 minutes), the queue waits for the end of the speech. With no active voice, it opens 1 s after the last fragment if no `io.voice.speak.start` came. In all cases, it opens 60 s after the last fragment.
+- **The floor:** before it takes the waiting messages, it waits until nobody speaks
+  (`io.user.voice.activity`), then 200 ms more for the last message. After `FLOOR_MAX_WAIT_SECONDS`
+  (15 s by default), Aletheia speaks. A `💥 Collision` log line counts the times that a person
+  starts to speak between the start of a turn and the first sound of Aletheia.
   See `src/turn_queue.py` and `docs/audits/io_oreilles-discord-multi-speaker-2026-10-12.md`.
 - **Prompt construction:** it builds an XML system prompt. See [`PROMPTING.md`](../../PROMPTING.md).
 - **Fragment streaming:** it cuts the answer at strong punctuation marks and publishes each fragment
@@ -53,6 +57,7 @@ The NATS address is in the source code. The service does not read `NATS_URL`.
 | `TOP_P` | `0.95` | The nucleus sampling value. |
 | `REASONING_EFFORT` | `default` | The initial reasoning effort. The TUI can change it. |
 | `MAX_CONCURRENT_INFERENCE` | `1` | The maximum number of inferences at the same time. Keep 1: a turn and a `lobe.topic.generate` share llama-server, which runs with `--parallel 1`. The queue answers one message at a time with any value. |
+| `FLOOR_MAX_WAIT_SECONDS` | `15` | The maximum wait for the free floor (`io.user.voice.activity`) before a turn. After it, Aletheia speaks, and the service forgets the speakers that it held. |
 
 The `.env` file also contains an `INTERFACE` variable and the Groq and Mistral API keys. The code
 does not use them. `main.py` selects `OpenAIInterface` at import time. This is a decision, not a

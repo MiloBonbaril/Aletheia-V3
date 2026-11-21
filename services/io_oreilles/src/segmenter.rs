@@ -41,6 +41,10 @@ const PREROLL_SAMPLES: usize = PREROLL_FRAMES * 512;
 pub enum FrameOutcome {
     Idle,
     SpeechStarted,
+    /// The segment now holds `MIN_SPEECH_FRAMES` of speech: it is a word, not a cough.
+    /// Given once for each turn, also when the turn is long and cut. `main.rs` publishes
+    /// `io.user.voice.activity` here, so the lobe_frontal does not take the floor.
+    SpeechConfirmed,
     Speaking,
     /// The buffer hit `MAX_CHUNK_SAMPLES` and the speaker has **not** stopped. Transcribe this
     /// chunk now to hide its cost behind the ongoing speech, but hold the text: publishing it
@@ -123,6 +127,8 @@ impl VadSegmenter {
                 self.force_cut()
             } else if just_started {
                 FrameOutcome::SpeechStarted
+            } else if self.speech_frames == MIN_SPEECH_FRAMES && !self.emitted_partial {
+                FrameOutcome::SpeechConfirmed
             } else {
                 FrameOutcome::Speaking
             }
@@ -187,6 +193,24 @@ mod tests {
         let mut seg = VadSegmenter::new();
         assert!(matches!(seg.push_frame(&frame(1.0), 0.9), FrameOutcome::SpeechStarted));
         assert!(matches!(seg.push_frame(&frame(1.0), 0.9), FrameOutcome::Speaking));
+    }
+
+    #[test]
+    fn confirms_speech_once_for_each_turn_even_across_a_forced_cut() {
+        let mut seg = VadSegmenter::new();
+        // 2000 trames, c'est 64 s : au moins deux coupes forcées à 25 s.
+        let confirmed = (0..2000)
+            .filter(|_| matches!(seg.push_frame(&frame(1.0), 0.9), FrameOutcome::SpeechConfirmed))
+            .count();
+        assert_eq!(confirmed, 1);
+    }
+
+    #[test]
+    fn a_cough_is_never_confirmed() {
+        let mut seg = VadSegmenter::new();
+        for _ in 0..MIN_SPEECH_FRAMES - 1 {
+            assert!(!matches!(seg.push_frame(&frame(1.0), 0.9), FrameOutcome::SpeechConfirmed));
+        }
     }
 
     #[test]

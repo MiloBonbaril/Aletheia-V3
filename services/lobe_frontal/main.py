@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from OpenAI.interface import OpenAIInterface
 from src.prompt_builder import PromptBuilder
 from src.fragments import take_fragment
-from src.turn_queue import is_for_turn, take_latest
+from src.turn_queue import apply_voice_activity, is_for_turn, take_latest, voice_active
 from tui import LobeTUI, ReasoningTrace
 
 load_dotenv()
@@ -28,6 +28,12 @@ load_dotenv()
 nc = None
 INFERENCE_SEMAPHORE = asyncio.Semaphore(int(os.getenv("MAX_CONCURRENT_INFERENCE", "1")))
 MAX_TOOL_ITERATIONS = 10
+# Attente maximale de la parole libre avant de générer : au-delà, Aletheia parle quand même.
+# Couvre aussi un `io.user.voice.activity` perdu.
+FLOOR_MAX_WAIT_SECONDS = float(os.getenv("FLOOR_MAX_WAIT_SECONDS", "15"))
+# ponytail: marge fixe après la parole libre, pour le trajet io.user.speak → cortex → cortex.prompt
+# (io_oreilles publie la fin de parole juste après le message). À mesurer si un message rate le lot.
+FLOOR_GRACE_SECONDS = 0.2
 
 # Configuration LLM forcée sur notre interface optimisée
 interface = OpenAIInterface()
@@ -250,6 +256,43 @@ async def main():
     inbox_ready = asyncio.Event()
     busy = False                 # vrai du début d'un tour jusqu'à ce qu'Aletheia se taise
     current_turn: dict | None = None
+    voice_seen: float | None = None  # dernier io.voice.speak.start ou .end, de n'importe quel tour
+    floor: set[str] = set()          # identifiants des locuteurs qui ont la parole (io.user.voice.activity)
+    floor_names: dict[str, str] = {}  # identifiant → dernier pseudo connu, pour les logs
+    floor_changed = asyncio.Event()
+
+    async def voice_activity_handler(msg):
+        try:
+            event = json.loads(msg.data.decode())
+        except Exception as e:
+            logger.error(f"Erreur parsing io.user.voice.activity: {e}")
+            return
+        turn = current_turn
+        if event.get("speaking") and turn is not None and not turn["speaking"].is_set():
+            # Compteur de la session réelle : quelqu'un parle entre le début du tour et le
+            # premier son d'Aletheia, donc elle va lui couper la parole.
+            logger.info(f"💥 Collision : {event.get('speaker') or 'micro'} parle avant le premier son du tour.")
+        if event.get("speaker_id"):
+            floor_names[event["speaker_id"]] = event.get("speaker") or event["speaker_id"]
+        apply_voice_activity(floor, event)
+        floor_changed.set()
+
+    async def wait_for_floor():
+        """Attend que personne ne parle avant de prendre le lot : Aletheia ne coupe la parole
+        à personne, et le message de la personne qui vient de se taire entre dans le lot."""
+        deadline = time.monotonic() + FLOOR_MAX_WAIT_SECONDS
+        while floor:
+            floor_changed.clear()
+            try:
+                await asyncio.wait_for(floor_changed.wait(), max(0.0, deadline - time.monotonic()))
+            except asyncio.TimeoutError:
+                names = ", ".join(sorted(floor_names.get(k, k or "micro") for k in floor))
+                logger.warning(f"⏳ Parole occupée depuis {FLOOR_MAX_WAIT_SECONDS:.0f} s ({names}) : Aletheia la prend.")
+                # Oublie les locuteurs : un événement de fin perdu ne bloque pas tous les tours suivants.
+                floor.clear()
+                return
+            if not floor:
+                await asyncio.sleep(FLOOR_GRACE_SECONDS)
 
     async def history_add(role: str, content, ack: bool = False):
         """Écrit un message dans l'historique. `ack` attend que l'hippocampe l'ait écrit :
@@ -296,13 +339,17 @@ async def main():
         """Attend qu'Aletheia se taise (`io.voice.speak.end` du dernier fragment) : un membre
         qui réagit à cette réponse parle pendant qu'elle parle encore, et le tour suivant
         doit l'entendre.
-        ponytail: deux garde-fous fixes. Sans TTS (profil sans-vocal), aucun `.start` n'arrive :
-        on libère 1 s après le dernier fragment. Si le lecteur meurt, plafond de 60 s."""
-        try:
-            await asyncio.wait_for(turn["speaking"].wait(), timeout=1.0)
-        except asyncio.TimeoutError:
-            logger.info("🔇 Aucune voix pour ce tour : la file repart.")
-            return
+        Voix active (voice_active) : on attend la fin, même si le `.start` tarde. Sinon (profil
+        sans-vocal, ou premier tour après le démarrage) : libéré 1 s après le dernier fragment
+        si aucun `.start` n'arrive.
+        ponytail: plafond fixe de 60 s si le lecteur meurt ; un TTS mort coûte ce plafond à
+        chaque tour pendant les 10 min de VOICE_ACTIVE_WINDOW."""
+        if not voice_active(voice_seen, time.monotonic()):
+            try:
+                await asyncio.wait_for(turn["speaking"].wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                logger.info("🔇 Aucune voix pour ce tour : la file repart.")
+                return
         try:
             await asyncio.wait_for(turn["silent"].wait(), timeout=60.0)
         except asyncio.TimeoutError:
@@ -310,6 +357,8 @@ async def main():
 
     def speech_handler(started: bool):
         async def handler(msg):
+            nonlocal voice_seen
+            voice_seen = time.monotonic()
             try:
                 event = json.loads(msg.data.decode())
             except Exception as e:
@@ -338,6 +387,7 @@ async def main():
         nonlocal busy, current_turn
         while True:
             await inbox_ready.wait()
+            await wait_for_floor()
             inbox_ready.clear()
             batch, inbox[:] = inbox[:], []
             skipped, latest = take_latest(batch)
@@ -512,6 +562,7 @@ async def main():
 
     await nc.subscribe("io.voice.speak.start", cb=speech_handler(started=True))
     await nc.subscribe("io.voice.speak.end", cb=speech_handler(started=False))
+    await nc.subscribe("io.user.voice.activity", cb=voice_activity_handler)
     worker_task = asyncio.create_task(inference_worker())  # gardé en vie : asyncio ne garde qu'une référence faible
     await nc.subscribe("cortex.prompt", queue="lobe_workers", cb=prompt_handler)
     logger.info("👂 Lobe Frontal prêt à foudroyer le TTFT.")
