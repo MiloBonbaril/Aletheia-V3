@@ -156,6 +156,33 @@ cmd = [
   "--port", "8080",
 ]
 
+# Qwen3.5 4B with the Aletheia LoRA (LLM_RESEARCH, 2026-11-18), trained with QAT for this exact
+# Q4_K_M file (llama-quantize without imatrix). Thinking stays on: lobe_frontal sends
+# enable_thinking, TEMPERATURE=0.1 and TOP_P=0.95 from its .env, the values of the evals.
+# No MTP draft: the MTP head of the GGUF is the one of the base model, it accepts 34 % of the
+# drafted tokens only, and the first word comes later (0.80 s instead of 0.67 s).
+# No mmproj: for the vision, start llama-server-lfm3-vl and io_yeux_lfm with it.
+[[service]]
+name = "llama-server-aletheia-qwen"
+group = "Cognition"
+kind = "process"
+cwd = "."
+depends_on = []
+ready_tcp = "127.0.0.1:8080"
+note = "Qwen3.5 4B + LoRA Aletheia, QAT Q4_K_M. Set TEMPERATURE=0.1 in the .env of lobe_frontal. Do not start it with another server on port 8080."
+cmd = [
+  "/home/milo/.local/bin/llama-server",
+  "-m", "/mnt/forge/dev/LLM_RESEARCH/train/out/qwen35-aletheia/gguf/aletheia-Q4_K_M.gguf",
+  "-ngl", "all",
+  "-c", "32768",
+  "-fa", "on",
+  "-np", "1",
+  "--jinja",
+  "--temp", "0.1",
+  "--host", "127.0.0.1",
+  "--port", "8080",
+]
+
 # The two entries below run together: Luth on 8080 for lobe_frontal, LFM3-VL on 8081 for
 # io_yeux_lfm. The sampling comes from the general.sampling keys of each GGUF file.
 

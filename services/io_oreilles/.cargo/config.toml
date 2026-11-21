@@ -1,0 +1,5 @@
+# CUDA 13 drops compute_53..72, but ct2rs compiles CTranslate2 for "Common" by default.
+# ct2rs moves 12.0 to an extra nvcc flag and falls back to "Common" when no architecture < 10
+# remains, thus 8.6 must stay in the list. 12.0 = RTX 5070 Ti (Blackwell).
+[env]
+CUDA_ARCH_LIST = "8.6;12.0"
