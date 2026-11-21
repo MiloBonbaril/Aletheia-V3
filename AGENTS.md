@@ -141,8 +141,11 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   interaction, the service makes no observation, because `llama-server` runs with `--parallel 1`.
   The service operates on KDE Plasma only, and it is in no profile of `services/terminal`. See
   `docs/adr/0006-io-yeux-capture-par-kwin-screenshot2.md`.
-- **io_chat**, **io_visage** — Twitch and YouTube chat aggregation, and VTube Studio control. These
-  two contain a README file only. There is no source code.
+- **io_visage** — The 2D avatar. Its code is in the sibling repository `../2D_Aletheia`, and
+  `services/io_visage/` holds its README only. It shows the mood, the lip-sync of the voice and a
+  listening posture. It publishes nothing. See `docs/adr/0007-io-visage-vit-dans-2d-aletheia.md`.
+- **io_chat** — Twitch and YouTube chat aggregation. It contains a README file only. There is no
+  source code.
 
 Each service starts independently. Each one has its own `requirements.txt` (Python) or `Cargo.toml`
 (Rust). There is no shared build system and no workspace.

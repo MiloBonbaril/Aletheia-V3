@@ -321,6 +321,16 @@ cmd = ["{python}", "bot.py"]
 depends_on = ["nats"]
 
 [[service]]
+name = "io_visage"
+group = "Entrées/sorties"
+kind = "process"
+cwd = "../2D_Aletheia"
+cmd = ["{python}", "server/avatar_server.py", "--nats", "nats://localhost:4222"]
+ready_tcp = "127.0.0.1:7430"
+depends_on = ["nats"]
+note = "2D avatar, code in ../2D_Aletheia. Preview: http://127.0.0.1:7430/ — OBS browser source: /obs?view=bust"
+
+[[service]]
 name = "io_yeux"
 group = "Entrées/sorties"
 kind = "process"
@@ -361,13 +371,13 @@ depends_on = ["nats"]
 # Profiles: named subsets. The daemon starts them in the order of this file.
 
 [profile.complet]
-services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_oreilles", "io_voix"]
+services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_oreilles", "io_voix", "io_visage"]
 
 [profile."sans-vocal"]
 services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal"]
 
 [profile.discord]
-services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_discord", "io_oreilles_discord", "io_voix_muet"]
+services = ["nats", "datastores", "llama-server", "cortex", "hippocampe", "limbic", "lobe_frontal", "io_discord", "io_oreilles_discord", "io_voix_muet", "io_visage"]
 
 [profile.infra]
 services = ["nats", "datastores", "llama-server"]

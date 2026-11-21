@@ -76,7 +76,8 @@ A `[[config_file]]` block declares a text file that the `Config` tab edits.
 A `[profile.<name>]` block gives a named subset of services. The console starts a profile in the
 order of the file.
 
-`io_visage`, `io_chat` and `terminal` are not in the manifest, because they have no source code.
+`io_chat` and `terminal` are not in the manifest: `io_chat` has no source code, and `terminal` is the
+daemon itself. `io_visage` is in the manifest, with a `cwd` in the sibling repository `../2D_Aletheia`.
 
 ## 🔍 What the console shows
 
@@ -212,5 +213,5 @@ cd services/terminal
 
 The message rate, the end-to-end latency and the p95 stay
 the property of `services/benchmark`, which measures them correctly. A browser shell, the launch of
-`io_visage` and `io_chat`, and the persistence of the logs are not present. The chat tab sends text
+`io_chat`, and the persistence of the logs are not present. The chat tab sends text
 only: `io.user.msg.text` accepts an `images` field, and the tab does not fill it.

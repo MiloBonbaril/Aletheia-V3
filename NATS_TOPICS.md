@@ -525,17 +525,6 @@ Send text to a different speech synthesis service.
 }
 ```
 
-#### `io.face.emotion` (planned)
-
-Send a facial expression command to VTube Studio (`io_visage`).
-
-```json
-{
-  "emotion": "surprised",
-  "intensity": 0.8
-}
-```
-
 #### `io.chat.msg` (planned)
 
 An aggregated summary of the Twitch or YouTube chat (`io_chat`).
@@ -573,5 +562,6 @@ restart of the cortex clears them.
 | terminal | `lobe.fragment_stream` | `io.user.msg.text` |
 | io_discord | `lobe.fragment_stream`, `io.voice.speak.audio` | `io.user.msg.text`, `io.presence.discord_voice`, `io.discord.voice.frame`, `io.voice.speak.start`, `io.voice.speak.end` |
 | io_text | — | `io.user.msg.text` |
+| io_visage | `limbic.mood.update`, `io.voice.speak.start`, `io.voice.speak.audio`, `io.voice.speak.end`, `cortex.interaction.started`, `io.user.voice.activity` | — |
 | io_yeux | `cortex.interaction.started`, `io.voice.speak.start`, `io.voice.speak.end`, `lobe.fragment_stream` | `io.vision.state` |
 | benchmark | all topics of the loaded graph | — |

@@ -40,9 +40,10 @@ measure by hand.
 | benchmark (latency harness) | `services/benchmark` | Python | Operational |
 | terminal (local control panel) | `services/terminal` | Python | Operational (V0.1) |
 | io_chat (chat aggregation) | `services/io_chat` | — | Specification only |
-| io_visage (VTube Studio control) | `services/io_visage` | — | Specification only |
+| io_visage (2D avatar) | `../2D_Aletheia` | Python / JavaScript | Operational |
 
-The two last services contain a README file only. They have no source code.
+`io_chat` contains a README file only. It has no source code. The code of `io_visage` is in the
+sibling repository `2D_Aletheia`.
 
 ## Architecture
 
@@ -101,7 +102,7 @@ flowchart TB
     subgraph Motor_Egress ["📤 MOTOR EGRESS (Outputs)"]
         direction LR
         voix["🔊 io_voix (Voice / TTS)<br/><i>Python / Audio8 TTS</i>"]:::egress
-        visage["👤 io_visage (Expression - Planned)"]:::egress
+        visage["👤 io_visage (2D avatar)<br/><i>Python / browser engine, OBS</i>"]:::egress
     end
 
     subgraph Observability ["🎛️ OBSERVABILITY"]
@@ -139,6 +140,7 @@ flowchart TB
     %% Egress
     nats -->|lobe.fragment_stream| voix
     voix -->|io.voice.speak.start/.audio/.end| nats
+    nats -->|limbic.mood.update<br/>io.voice.speak.*<br/>io.user.voice.activity| visage
     nats -->|io.voice.speak.audio| discord
     nats -.->|fragments| visage
 

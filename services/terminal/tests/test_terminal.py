@@ -35,8 +35,12 @@ def test_manifest_loads_and_resolves_paths():
     manifest = Manifest.load(HERE.parent / "services.toml", ROOT)
     names = [e.name for e in manifest.entries]
     assert "cortex" in names and "llama-server" in names
-    # io_visage, io_chat and terminal have no source code: they are not managed.
-    assert not {"io_visage", "io_chat", "terminal"} & set(names)
+    # io_chat has no source code, and terminal is the daemon: they are not managed.
+    assert not {"io_chat", "terminal"} & set(names)
+    # io_visage runs from the sibling repository 2D_Aletheia (docs/adr/0007).
+    visage = next(e for e in manifest.entries if e.name == "io_visage")
+    assert visage.cwd == (ROOT.parent / "2D_Aletheia").resolve()
+    assert visage.cmd[1] == "server/avatar_server.py"
     cortex = next(e for e in manifest.entries if e.name == "cortex")
     assert cortex.cwd == (ROOT / "services/cortex").resolve()
     assert cortex.rebuild == ["cargo", "build", "--release"]
