@@ -179,11 +179,13 @@ that rule for every profile.
 - `io_voix` / `io_voix_muet`: the local speaker, or `MUTE_LOCAL_PLAYBACK=1`, which publishes the
   audio on NATS only. Use the muted one with `io_discord`, because the bot plays the audio itself.
 - `llama-server` / `llama-server-qwen` / `llama-server-bonsai` / `llama-server-luth` /
-  `llama-server-aletheia` / `llama-server-aletheia-qwen`: six LLM models on the same port,
+  `llama-server-aletheia` / `llama-server-aletheia-qwen` / `llama-server-aletheia-qwen-dpo`: seven
+  LLM models on the same port,
   `127.0.0.1:8080`, and on the same GPU.
   `llama-server` (Gemma) is the one in the profiles. Start another one by hand in its place.
   `llama-server-aletheia` is LFM3 1.7B with the Aletheia LoRA, and `llama-server-aletheia-qwen`
-  is Qwen3.5 4B with the Aletheia LoRA, trained with QAT for its Q4_K_M file: set
+  is Qwen3.5 4B with the Aletheia LoRA, trained with QAT for its Q4_K_M file;
+  `llama-server-aletheia-qwen-dpo` is the same model after DPO (candidate): set
   `TEMPERATURE=0.1` in `services/lobe_frontal/.env` before you start `lobe_frontal` with either.
 - `io_yeux` / `io_yeux_lfm`: the same screen capture. `io_yeux_lfm` sends the screen to
   `llama-server-lfm3-vl` on port 8081. Start `llama-server-luth`, `llama-server-aletheia` or

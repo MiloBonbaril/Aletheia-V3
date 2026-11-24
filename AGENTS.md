@@ -121,9 +121,9 @@ The services are in `services/<name>`. Their names come from a brain metaphor.
   the `tickets/` folder, and `Issues` reads the GitHub issues through `gh`. Some manifest entries
   come in pairs that must never run together, because they share a device or a port:
   `io_oreilles` / `io_oreilles_discord`, `io_voix` / `io_voix_muet`, `io_yeux` / `io_yeux_lfm`, and the six entries `llama-server`,
-  `llama-server-qwen`, `llama-server-bonsai`, `llama-server-luth`, `llama-server-aletheia` and `llama-server-aletheia-qwen` (port 8080). `llama-server-lfm3-vl` (port 8081) runs with
+  `llama-server-qwen`, `llama-server-bonsai`, `llama-server-luth`, `llama-server-aletheia`, `llama-server-aletheia-qwen` and `llama-server-aletheia-qwen-dpo` (port 8080). `llama-server-lfm3-vl` (port 8081) runs with
   `llama-server-luth`, `llama-server-aletheia` or `llama-server-aletheia-qwen` and serves `io_yeux_lfm`. `llama-server-aletheia` serves the
-  LFM3 1.7B model with the Aletheia LoRA, `llama-server-aletheia-qwen` the Qwen3.5 4B model with the Aletheia LoRA (QAT Q4_K_M): set `TEMPERATURE=0.1` in the `.env` of `lobe_frontal` for them. `tests/test_terminal.py` checks the profiles against these
+  LFM3 1.7B model with the Aletheia LoRA, `llama-server-aletheia-qwen` the Qwen3.5 4B model with the Aletheia LoRA (QAT Q4_K_M), `llama-server-aletheia-qwen-dpo` the same after DPO (candidate): set `TEMPERATURE=0.1` in the `.env` of `lobe_frontal` for them. `tests/test_terminal.py` checks the profiles against these
   groups. The daemon kills every service when it
   stops, and it never restarts a crashed one. It reads the bus figures through the monitoring
   endpoint of NATS (`/varz`, `/connz`), never through a subscription. A `Chat` tab does the work of

@@ -183,6 +183,30 @@ cmd = [
   "--port", "8080",
 ]
 
+# The same model after two DPO rounds on the SFT (LLM_RESEARCH, 2026-11-23, candidate): it keeps
+# silent between humans and obeys "tais-toi" more often, calls set_mood and get_from_memory more
+# often. Same Q4_K_M export without imatrix, same settings as llama-server-aletheia-qwen.
+[[service]]
+name = "llama-server-aletheia-qwen-dpo"
+group = "Cognition"
+kind = "process"
+cwd = "."
+depends_on = []
+ready_tcp = "127.0.0.1:8080"
+note = "Qwen3.5 4B + LoRA Aletheia + DPO tour 2, Q4_K_M. Set TEMPERATURE=0.1 in the .env of lobe_frontal. Do not start it with another server on port 8080."
+cmd = [
+  "/home/milo/.local/bin/llama-server",
+  "-m", "/mnt/forge/dev/LLM_RESEARCH/train/out/dpo2/run/gguf/aletheia-dpo2-Q4_K_M.gguf",
+  "-ngl", "all",
+  "-c", "32768",
+  "-fa", "on",
+  "-np", "1",
+  "--jinja",
+  "--temp", "0.1",
+  "--host", "127.0.0.1",
+  "--port", "8080",
+]
+
 # The two entries below run together: Luth on 8080 for lobe_frontal, LFM3-VL on 8081 for
 # io_yeux_lfm. The sampling comes from the general.sampling keys of each GGUF file.
 
